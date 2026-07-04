@@ -1,0 +1,123 @@
+/* Plan multicast — styles (tokens de base.css). */
+.mi-app { display: grid; grid-template-columns: 300px 1fr; gap: 14px; min-height: 460px; }
+
+/* ── Volet gauche : plages ── */
+.mi-side { border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 10px;
+    display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.mi-side-head { display: flex; align-items: center; gap: 8px; }
+.mi-side-head strong { flex: 1; }
+.mi-count { color: var(--text-muted); font-size: 0.85em; }
+
+.mi-search { position: relative; display: flex; align-items: center; }
+.mi-search-ico { position: absolute; left: 8px; color: var(--text-muted); pointer-events: none; }
+.mi-search input { width: 100%; padding: 7px 10px 7px 26px; background: var(--bg-input);
+    border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-small); font: inherit; }
+.mi-find-res { border: 1px solid var(--border-soft); border-radius: var(--radius-small);
+    padding: 8px 10px; font-size: 0.85em; background: var(--bg-soft); display: flex;
+    flex-direction: column; gap: 3px; }
+.mi-find-res a { color: var(--accent); }
+
+.mi-ranges { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex: 1;
+    display: flex; flex-direction: column; gap: 6px; }
+.mi-range { border: 1px solid var(--border-soft); border-radius: var(--radius-small);
+    padding: 8px 10px; cursor: pointer; }
+.mi-range:hover { background: var(--bg-hover); }
+.mi-range.sel { background: var(--bg-selected); border-color: var(--accent); }
+.mi-range-top { display: flex; align-items: center; gap: 6px; }
+.mi-range-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-range-cidr { color: var(--text-muted); font-size: 0.8em; margin: 2px 0 5px; }
+.mi-warn { color: var(--status-warning-fg); font-size: 0.78em; margin-top: 4px; }
+
+.mi-side-foot { display: flex; gap: 6px; border-top: 1px solid var(--border-soft); padding-top: 8px; }
+.mi-io { font-size: 0.85em; }
+.mi-export { position: relative; }
+.mi-export-menu { position: absolute; bottom: 100%; left: 0; margin-bottom: 4px;
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-small);
+    box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 140px; z-index: 5; }
+.mi-export-menu button { background: none; border: none; color: var(--text); text-align: left;
+    padding: 8px 12px; cursor: pointer; font: inherit; }
+.mi-export-menu button:hover { background: var(--bg-hover); }
+
+/* ── Jauge d'occupation ── */
+.mi-gauge { position: relative; height: 16px; background: var(--bg-soft);
+    border-radius: 8px; overflow: hidden; border: 1px solid var(--border-soft); }
+.mi-gauge-fill { position: absolute; inset: 0 auto 0 0; background: var(--status-running-fg);
+    opacity: 0.75; border-radius: 8px 0 0 8px; }
+.mi-gauge-fill.warm { background: var(--status-warning-fg); }
+.mi-gauge-fill.hot { background: var(--status-stopped-fg); }
+.mi-gauge-txt { position: relative; display: block; text-align: center; font-size: 0.72em;
+    line-height: 16px; font-family: var(--font-mono); color: var(--text); }
+
+/* ── Puces (essence / réseau) ── */
+.mi-chip { font-size: 0.72em; padding: 2px 7px; border-radius: 10px; white-space: nowrap;
+    background: var(--bg-soft); border: 1px solid var(--border-soft); color: var(--text-muted); }
+.mi-chip.e-video { color: var(--topo-flow-video-active, var(--accent)); }
+.mi-chip.e-audio-2110-30 { color: var(--topo-flow-audio-active, var(--accent)); }
+.mi-chip.e-anc-2110-40 { color: var(--topo-flow-data-active, var(--accent)); }
+.mi-chip.net-rouge { color: var(--status-stopped-fg); }
+.mi-chip.net-bleu { color: var(--status-info-fg, var(--accent)); }
+
+/* ── Panneau principal ── */
+.mi-main { border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 16px;
+    min-width: 0; overflow: auto; }
+.mi-detail-head { display: flex; align-items: flex-start; gap: 12px; }
+.mi-detail-head h2 { margin: 0; }
+.mi-detail-meta { color: var(--text-muted); font-size: 0.85em; margin-top: 2px; }
+.mi-detail-actions { margin-left: auto; white-space: nowrap; }
+.mi-detail-badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.mi-notes { color: var(--text-muted); font-size: 0.88em; margin-bottom: 10px; white-space: pre-wrap; }
+.mi-occ { max-width: 320px; margin-bottom: 16px; }
+
+.mi-assign-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.mi-assign-head strong { flex: 1; }
+
+.mi-table { width: 100%; border-collapse: collapse; font-size: 0.88em; }
+.mi-table th { text-align: left; color: var(--text-muted); font-weight: 600;
+    border-bottom: 1px solid var(--border); padding: 6px 8px; }
+.mi-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+.mi-actcell { white-space: nowrap; text-align: right; }
+.mi-mini { padding: 3px 8px; font-size: 0.85em; }
+.mono { font-family: var(--font-mono); }
+
+/* ── Modales ── */
+.mi-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 40;
+    display: flex; align-items: center; justify-content: center; padding: 20px; }
+.mi-modal-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 20px; width: 100%; max-width: 460px; max-height: 90vh; overflow: auto; }
+.mi-modal-wide { max-width: 680px; }
+.mi-modal-card h3 { margin: 0 0 14px; }
+.mi-form { display: flex; flex-direction: column; gap: 12px; }
+.mi-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85em; color: var(--text-muted); }
+.mi-form input, .mi-form select, .mi-form textarea { background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--text); padding: 7px 10px; border-radius: var(--radius-small); font: inherit; }
+.mi-form input.mono { font-family: var(--font-mono); }
+.mi-row2 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.mi-bounds { border: 1px solid var(--border-soft); border-radius: var(--radius-small); padding: 10px;
+    display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: center; }
+.mi-bounds legend { font-size: 0.8em; color: var(--text-muted); padding: 0 4px; }
+.mi-radio { flex-direction: row !important; align-items: center; gap: 6px; }
+.mi-rangepair { display: flex; gap: 8px; }
+.mi-rangepair input { flex: 1; min-width: 0; }
+.mi-addrline { display: flex; gap: 8px; }
+.mi-addrline input { flex: 1; }
+.mi-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ── Résultats du rapprochement ── */
+.mi-recon-sum { color: var(--text-muted); font-size: 0.88em; margin-bottom: 12px; }
+.mi-recon-fail { color: var(--status-warning-fg); padding: 10px; }
+.mi-recon-sec { border: 1px solid var(--border-soft); border-radius: var(--radius-small);
+    margin-bottom: 8px; padding: 4px 10px; }
+.mi-recon-sec summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.mi-recon-sec ul { list-style: none; padding: 0; margin: 4px 0 8px; display: flex;
+    flex-direction: column; gap: 3px; font-size: 0.88em; }
+.mi-recon-n { display: inline-block; min-width: 20px; text-align: center; border-radius: 10px;
+    background: var(--bg-soft); padding: 0 6px; font-size: 0.85em; margin-left: 4px; }
+.mi-recon-sec.ok summary { color: var(--status-running-fg); }
+.mi-recon-sec.warn summary { color: var(--status-warning-fg); }
+.mi-recon-sec.bad summary { color: var(--status-stopped-fg); }
+.mi-recon-sec.idle summary { color: var(--text-muted); }
+
+@media (max-width: 720px) {
+    .mi-app { grid-template-columns: 1fr; }
+    .mi-row2 { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,14 @@
+{
+  "date": "2026-07-04",
+  "changes": {
+    "Nouveautés": [
+      "v0.1.0 — Première version. Registre du plan d'adressage multicast d'un fabric ST 2110 (runtime in-process, backend.py). PLAGES : CRUD par CIDR ou début-fin, essence (video / audio-2110-30 / anc-2110-40 / autre), réseau (rouge / bleu / les-deux), VLAN et notes ; validation du bloc multicast 224.0.0.0/4 et AVERTISSEMENT de chevauchement des plages. ATTRIBUTIONS : CRUD d'adresses simples ou de sous-blocs à l'intérieur d'une plage (équipement, libellé, port UDP), aide « prochaine adresse libre ». Vue par plage avec JAUGE d'occupation (attribuées/total). Recherche « où est 239.1.2.3 ? » (plage + attribution).",
+      "v0.1.0 — RAPPROCHEMENT avec le réel : le front collecte les groupes multicast réellement actifs auprès de Monitoring 2110 (mêmes session/permissions) et le backend classe en conformes / actifs non documentés / documentés mais inactifs / actifs hors de toute plage. Dégrade proprement si Monitoring 2110 est arrêté ou inaccessible (le plan reste utilisable).",
+      "v0.1.0 — EXPORT du plan en JSON et CSV (téléchargement côté navigateur)."
+    ],
+    "Bugs connus": [
+      "Le rapprochement identifie une attribution active dès qu'un groupe actif tombe dans son adresse/sous-bloc ; il ne distingue pas les sources SSM (S,G) — l'appariement se fait sur l'adresse de groupe.",
+      "« Prochaine adresse libre » et le calcul d'occupation sont bornés (200 000 adresses balayées au plus) : sur une plage énorme et pleine, l'outil renvoie un message plutôt que de balayer tout l'espace."
+    ]
+  }
+}

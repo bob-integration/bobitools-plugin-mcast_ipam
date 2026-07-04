@@ -1,0 +1,113 @@
+<!-- Plan multicast — fragment monté par window.BTTools.mcast_ipam.mount(el, ctx). -->
+<div class="mi-app">
+  <aside class="mi-side">
+    <div class="mi-side-head">
+      <strong>Plages</strong><span class="mi-count" id="mi-count"></span>
+      <button class="btn btn-green" id="mi-range-new" type="button" title="Nouvelle plage">+ Plage</button>
+    </div>
+
+    <div class="mi-search">
+      <span class="mi-search-ico" aria-hidden="true">⌕</span>
+      <input type="search" id="mi-find" autocomplete="off" spellcheck="false"
+             placeholder="Où est une adresse ? (ex. 239.1.2.3)">
+    </div>
+    <div class="mi-find-res" id="mi-find-res" hidden></div>
+
+    <ul class="mi-ranges" id="mi-ranges"><li class="meta">Chargement…</li></ul>
+
+    <div class="mi-side-foot">
+      <button class="btn mi-io" id="mi-reconcile" type="button"
+              title="Comparer le plan aux groupes multicast réellement actifs (Monitoring 2110)">↔ Rapprocher</button>
+      <details class="mi-export" id="mi-export-d">
+        <summary class="btn mi-io" title="Exporter le plan">Exporter ▾</summary>
+        <div class="mi-export-menu" role="menu">
+          <button type="button" id="mi-exp-json" role="menuitem">JSON (.json)</button>
+          <button type="button" id="mi-exp-csv" role="menuitem">CSV (.csv)</button>
+        </div>
+      </details>
+    </div>
+  </aside>
+
+  <section class="mi-main" id="mi-main">
+    <div class="meta">Sélectionnez une plage à gauche, ou créez-en une.</div>
+  </section>
+</div>
+
+<!-- Modale plage (création / édition). -->
+<div class="mi-modal" id="mi-range-modal" hidden>
+  <div class="mi-modal-card">
+    <h3 id="mi-range-title">Nouvelle plage</h3>
+    <form id="mi-range-form" class="mi-form">
+      <label>Nom <input type="text" name="name" required maxlength="120" placeholder="ex. Vidéo — réseau rouge"></label>
+      <fieldset class="mi-bounds">
+        <legend>Adresses</legend>
+        <label class="mi-radio"><input type="radio" name="mode" value="cidr" checked> CIDR</label>
+        <input type="text" name="cidr" class="mono" placeholder="239.1.0.0/24">
+        <label class="mi-radio"><input type="radio" name="mode" value="range"> Début–fin</label>
+        <span class="mi-rangepair">
+          <input type="text" name="start" class="mono" placeholder="239.1.0.0" disabled>
+          <input type="text" name="end" class="mono" placeholder="239.1.0.255" disabled>
+        </span>
+      </fieldset>
+      <div class="mi-row2">
+        <label>Essence
+          <select name="essence">
+            <option value="video">Vidéo (2110-20)</option>
+            <option value="audio-2110-30">Audio (2110-30)</option>
+            <option value="anc-2110-40">Données auxiliaires (2110-40)</option>
+            <option value="autre">Autre</option>
+          </select>
+        </label>
+        <label>Réseau
+          <select name="network">
+            <option value="les-deux">Les deux</option>
+            <option value="rouge">Rouge</option>
+            <option value="bleu">Bleu</option>
+          </select>
+        </label>
+        <label>VLAN <input type="number" name="vlan" min="1" max="4094" placeholder="—"></label>
+      </div>
+      <label>Notes <textarea name="notes" rows="2" placeholder="(optionnel)"></textarea></label>
+      <div class="mi-modal-actions">
+        <button type="button" class="btn" id="mi-range-cancel">Annuler</button>
+        <button type="submit" class="btn btn-green">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modale attribution. -->
+<div class="mi-modal" id="mi-assign-modal" hidden>
+  <div class="mi-modal-card">
+    <h3 id="mi-assign-title">Nouvelle attribution</h3>
+    <form id="mi-assign-form" class="mi-form">
+      <input type="hidden" name="range_id">
+      <label>Adresse ou sous-bloc
+        <span class="mi-addrline">
+          <input type="text" name="address" class="mono" required placeholder="239.1.0.10 ou 239.1.0.16/28">
+          <button type="button" class="btn" id="mi-nextfree" title="Proposer la prochaine adresse libre">Libre ?</button>
+        </span>
+      </label>
+      <div class="mi-row2">
+        <label>Équipement / flux <input type="text" name="device" maxlength="120" placeholder="ex. CAM-01"></label>
+        <label>Libellé <input type="text" name="label" maxlength="200" placeholder="ex. Caméra 1 — vidéo"></label>
+        <label>Port UDP <input type="number" name="udp_port" min="0" max="65535" placeholder="—"></label>
+      </div>
+      <div class="mi-modal-actions">
+        <button type="button" class="btn" id="mi-assign-cancel">Annuler</button>
+        <button type="submit" class="btn btn-green">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modale rapprochement (résultats). -->
+<div class="mi-modal" id="mi-recon-modal" hidden>
+  <div class="mi-modal-card mi-modal-wide">
+    <h3>Rapprochement avec le fabric</h3>
+    <div id="mi-recon-body"><div class="meta">…</div></div>
+    <div class="mi-modal-actions">
+      <button type="button" class="btn" id="mi-recon-close">Fermer</button>
+    </div>
+  </div>
+</div>
