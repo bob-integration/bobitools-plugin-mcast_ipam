@@ -284,13 +284,33 @@ window.BTTools.mcast_ipam = (function () {
         const sw = await BT.fetchJSON("/api/tools/monitoring_2110/switches");
         const switches = (sw && sw.switches) || [];
         const byGroup = new Map();
+        const failed = [];
         for (const s of switches) {
+            const name = s.name || s.id;
             let res;
             try {
                 res = await BT.fetchJSON("/api/tools/monitoring_2110/switches/" +
                     encodeURIComponent(s.id) + "/groups");
             } catch (e) {
-                // switch hors périmètre (MikroTik : 400) ou injoignable : on l'ignore.
+                // Un 400 = switch hors périmètre (MikroTik) : exclusion légitime et définitive,
+                // il n'a rien à dire du multicast. Tout autre échec est une LACUNE de collecte.
+                // Avant, les deux étaient confondus dans un `continue` muet : les flux vivants
+                // d'un switch non lu ressortaient en « documentés mais inactifs ».
+                if (e.status !== 400) failed.push({ id: s.id, name: name, reason: e.message || ("HTTP " + e.status) });
+                continue;
+            }
+            // Piège : un Nexus injoignable ne lève PAS d'erreur ici. monitoring_2110 rattrape
+            // le DriverError et répond 200 avec une liste vide — indiscernable d'un switch
+            // sans aucun groupe. Seul indice restant dans le contrat de cet endpoint : le
+            // texte brut de la commande, vide lui aussi quand rien n'a été lu, alors qu'un
+            // switch réellement interrogé en renvoie toujours l'en-tête, même sans groupe.
+            // (`unreachable` est testé d'abord au cas où monitoring_2110 se mette à le poser.)
+            if (res && res.unreachable) {
+                failed.push({ id: s.id, name: name, reason: res.error || "injoignable" });
+                continue;
+            }
+            if (!(res.groups || []).length && !((res.raw_text || "") + "").trim()) {
+                failed.push({ id: s.id, name: name, reason: "aucune réponse du switch" });
                 continue;
             }
             for (const g of (res.groups || [])) {
@@ -298,7 +318,7 @@ window.BTTools.mcast_ipam = (function () {
                 byGroup.set(g.group, { group: g.group, vlan: g.vlan, source: g.source || "" });
             }
         }
-        return Array.from(byGroup.values());
+        return { groups: Array.from(byGroup.values()), failed: failed };
     }
     function reconMessage(e) {
         if (e.status === 503) return "Monitoring 2110 est arrêté. Démarrez-le pour lancer le rapprochement.";
@@ -310,15 +330,15 @@ window.BTTools.mcast_ipam = (function () {
         const m = $("#mi-recon-modal"), body = $("#mi-recon-body");
         body.innerHTML = '<div class="meta">Collecte des groupes actifs…</div>';
         m.hidden = false;
-        let active;
-        try { active = await collectActiveGroups(); }
+        let active, failed;
+        try { const c = await collectActiveGroups(); active = c.groups; failed = c.failed; }
         catch (e) {
             body.innerHTML = '<div class="mi-recon-fail">' + esc(reconMessage(e)) +
                 '<br><span class="meta">Le plan reste consultable et modifiable.</span></div>';
             return;
         }
         try {
-            const r = await CTX.api("reconcile", { body: { active } });
+            const r = await CTX.api("reconcile", { body: { active, failed } });
             renderRecon(r);
         } catch (e) {
             body.innerHTML = '<div class="mi-recon-fail">' + esc(e.message) + '</div>';
@@ -335,7 +355,16 @@ window.BTTools.mcast_ipam = (function () {
         const g = (x) => '<span class="mono">' + esc(x.group) + '</span>' +
             (x.source ? ' <span class="meta">(' + esc(x.source) + ')</span>' : "") +
             (x.vlan != null ? ' <span class="meta">VLAN ' + esc(x.vlan) + '</span>' : "");
-        $("#mi-recon-body").innerHTML =
+        // Collecte partielle : on le dit AVANT les listes. Sans ce bandeau, la section des
+        // inactifs se lisait comme un constat, alors qu'elle ne dit rien des switchs non lus.
+        const fails = s.failed_switches || [];
+        const complete = s.complete !== false;
+        const warn = complete ? "" : '<div class="mi-recon-fail">Collecte incomplète : ' +
+            esc(fails.length) + ' switch(s) non lus (' +
+            fails.map((f) => esc(f.name) + (f.reason ? ' — ' + esc(f.reason) : "")).join(", ") +
+            '). Les groupes qu\'ils portent sont absents du relevé : la liste des inactifs ' +
+            'n\'est PAS fiable, ne libérez aucune adresse sur cette base.</div>';
+        $("#mi-recon-body").innerHTML = warn +
             '<div class="mi-recon-sum">' + esc(s.active_total) + ' groupes actifs · ' +
             esc(s.documented_total) + ' attributions documentées</div>' +
             reconSection("✓ Conformes", "ok", r.conformes, (x) =>
@@ -344,7 +373,8 @@ window.BTTools.mcast_ipam = (function () {
                 '<li>' + g(x) + ' — plage ' + esc(x.range.name) + '</li>') +
             reconSection("⚠ Actifs hors de toute plage", "bad", r.out_of_range, (x) =>
                 '<li>' + g(x) + '</li>') +
-            reconSection("○ Documentés mais inactifs", "idle", r.inactive, (x) =>
+            reconSection(complete ? "○ Documentés mais inactifs"
+                                  : "○ Documentés, activité INDÉTERMINÉE", "idle", r.inactive, (x) =>
                 '<li><span class="mono">' + esc(x.address) + '</span> ' +
                 esc(x.label || x.device || "") + (x.range_name ? ' <span class="meta">(' + esc(x.range_name) + ')</span>' : "") + '</li>');
     }

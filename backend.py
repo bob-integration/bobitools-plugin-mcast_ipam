@@ -282,9 +282,17 @@ def _validate_assign(payload, ctx, ranges, self_id=None):
 
 # ─── Rapprochement avec le réel ───────────────────────────────────────────────
 
-def _reconcile(active, ranges, assigns):
+def _reconcile(active, ranges, assigns, failed=None):
     """Compare le PLAN (plages + attributions) aux groupes réellement ACTIFS (fournis par le
-    front depuis monitoring_2110) et classe en 4 catégories."""
+    front depuis monitoring_2110) et classe en 4 catégories.
+
+    `failed` : switchs dont les groupes n'ont PAS pu être lus, recensés par le front. Avant,
+    cette information n'existait pas : un leaf injoignable contribuait zéro groupe et toutes
+    les attributions qu'il portait basculaient en « inactives » — présentées à l'opérateur
+    comme un constat, alors qu'elles étaient peut-être bien vivantes. Le risque n'est pas
+    théorique : on réattribue volontiers une adresse déclarée inactive, et deux émetteurs sur
+    la même adresse cassent le flux en direct. Une collecte partielle doit donc voyager
+    jusqu'au rapport, où elle disqualifie explicitement la liste des inactifs."""
     # Groupes actifs dédoublonnés par adresse de groupe (on garde vlan/source du 1er vu).
     seen, act = set(), []
     for g in active or []:
@@ -340,6 +348,10 @@ def _reconcile(active, ranges, assigns):
                              "address": a["address"], "range_id": a["range_id"],
                              "range_name": rg["name"] if rg else None})
 
+    fails = [{"name": str(f.get("name") or f.get("id") or "?"),
+              "reason": str(f.get("reason") or "")}
+             for f in (failed or []) if isinstance(f, dict)]
+
     return {
         "conformes": conformes,
         "undocumented": undocumented,
@@ -349,6 +361,9 @@ def _reconcile(active, ranges, assigns):
             "conformes": len(conformes), "undocumented": len(undocumented),
             "out_of_range": len(out_of_range), "inactive": len(inactive),
             "active_total": len(act), "documented_total": len(assigns),
+            # `complete` gouverne l'affichage : à faux, « inactif » ne veut plus dire
+            # « éteint » mais « pas vu », et la liste ne doit pas servir à libérer une adresse.
+            "failed_switches": fails, "complete": not fails,
         },
     }
 
@@ -560,8 +575,11 @@ def api(path, method, payload, ctx):
         active = payload.get("active")
         if not isinstance(active, list):
             return 400, {"error": "liste 'active' requise"}
-        res = _reconcile(active, _list_ranges(ctx), _list_assigns(ctx))
-        ctx.audit("reconcile", f"{res['summary']['active_total']} groupes actifs")
+        res = _reconcile(active, _list_ranges(ctx), _list_assigns(ctx),
+                         payload.get("failed"))
+        nko = len(res["summary"]["failed_switches"])
+        ctx.audit("reconcile", f"{res['summary']['active_total']} groupes actifs"
+                               + (f" — collecte INCOMPLÈTE : {nko} switch(s) non lus" if nko else ""))
         return res
 
     # ── Export (données brutes ; le front fabrique le téléchargement) ──
