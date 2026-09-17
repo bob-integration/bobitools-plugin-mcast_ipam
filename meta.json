@@ -1,14 +1,19 @@
 {
-  "date": "2026-07-04",
-  "changes": {
-    "Nouveautés": [
-      "v0.1.0 — Première version. Registre du plan d'adressage multicast d'un fabric ST 2110 (runtime in-process, backend.py). PLAGES : CRUD par CIDR ou début-fin, essence (video / audio-2110-30 / anc-2110-40 / autre), réseau (rouge / bleu / les-deux), VLAN et notes ; validation du bloc multicast 224.0.0.0/4 et AVERTISSEMENT de chevauchement des plages. ATTRIBUTIONS : CRUD d'adresses simples ou de sous-blocs à l'intérieur d'une plage (équipement, libellé, port UDP), aide « prochaine adresse libre ». Vue par plage avec JAUGE d'occupation (attribuées/total). Recherche « où est 239.1.2.3 ? » (plage + attribution).",
-      "v0.1.0 — RAPPROCHEMENT avec le réel : le front collecte les groupes multicast réellement actifs auprès de Monitoring 2110 (mêmes session/permissions) et le backend classe en conformes / actifs non documentés / documentés mais inactifs / actifs hors de toute plage. Dégrade proprement si Monitoring 2110 est arrêté ou inaccessible (le plan reste utilisable).",
-      "v0.1.0 — EXPORT du plan en JSON et CSV (téléchargement côté navigateur)."
-    ],
-    "Bugs connus": [
-      "Le rapprochement identifie une attribution active dès qu'un groupe actif tombe dans son adresse/sous-bloc ; il ne distingue pas les sources SSM (S,G) — l'appariement se fait sur l'adresse de groupe.",
-      "« Prochaine adresse libre » et le calcul d'occupation sont bornés (200 000 adresses balayées au plus) : sur une plage énorme et pleine, l'outil renvoie un message plutôt que de balayer tout l'espace."
-    ]
-  }
+ "date": "2026-09-17",
+ "changes": {
+  "Nouveautés": [
+   "v0.3.0 — UN ÉQUIPEMENT NE RÉSERVE PLUS QUE CE QU'IL PORTE. À la création on coche les essences (vidéo, ANC, audio 1, audio 2) et on donne le nombre de CANAUX : un boîtier purement audio à 8 canaux réserve 239.F.E.101–108 et rien d'autre, au lieu des 200 adresses que la convention ouvre. Le reste de chaque plage demeure libre. Le formulaire refuse un nombre de canaux qui déborderait sur l'essence suivante — au-delà, l'adresse changerait de sens. L'aperçu énumère les plages obtenues avant l'enregistrement. Mesuré sur le parc : les SNP portent 32 canaux sur les quatre essences, les familles 80 et 82 n'ont que de l'audio 1 sur 3 à 4 canaux. NOUVELLE CATÉGORIE au rapprochement, « actifs au-delà du déclaré » : une adresse conforme à la convention mais hors des canaux ou des essences déclarés dit que le PLAN est en retard sur le matériel — ce qui se corrige dans le plan, pas dans l'équipement, et n'a donc rien à faire parmi les anomalies. Vérifié en sous-déclarant volontairement un SNP à 8 canaux : 96 flux basculent dans cette catégorie, aucun dans les défauts.",
+   "v0.2.0 — LA CONVENTION DEVIENT LE PLAN, ET L'OBJET QU'ON CRÉE EST L'ÉQUIPEMENT. On décrit la RÈGLE d'adressage une fois (`239.FAMILLE.ÉQUIPEMENT.FLUX`, bornes et port UDP par essence, décalage du secours 2022-7), puis on déclare ses ÉQUIPEMENTS — c'est eux qu'on branche, qu'on nomme et qu'on renumérote. La famille n'est pas un objet : c'est un attribut de l'équipement, et le regroupement s'en déduit à l'affichage. Les adresses SE CALCULENT et ne sont jamais stockées — les écrire créerait une seconde vérité, fausse au premier renumérotage. La convention maison est amorcée d'office : vidéo 1-50 :2120, ANC 51-100 :2140, audio 1 101-150 et audio 2 201-250 :2130, secours = famille +100. Mesurée sur le fabric avant d'être posée : 392 adresses sur 392 conformes, 384 secours sur 384. Le formulaire montre l'adresse obtenue AVANT d'enregistrer : c'est le dernier moment où une erreur de numéro se voit encore. L'unicast est retenu à titre DOCUMENTAIRE — mesuré sur le parc, le numéro d'équipement ne s'en déduit pas (10.1.211.49 porte 239.4.1.x). RAPPROCHEMENT refondu en cinq catégories, qui distingue ce que nos équipements ÉMETTENT de ce qu'ils REÇOIVENT d'un tiers : un flux tiers n'a pas à suivre notre plan, et le ranger parmi les anomalies noyait les vrais défauts. Nouvelle catégorie « équipements présents non recensés », qui a immédiatement révélé deux équipements actifs absents du plan. Le sens et le port viennent des SDP publiés par Monitoring 2110 ; s'ils manquent, le rapprochement fonctionne quand même, en moins fin.",
+   "v0.1.0 — Première version. Registre du plan d'adressage multicast d'un fabric ST 2110 (runtime in-process, backend.py). PLAGES : CRUD par CIDR ou début-fin, essence (video / audio-2110-30 / anc-2110-40 / autre), réseau (rouge / bleu / les-deux), VLAN et notes ; validation du bloc multicast 224.0.0.0/4 et AVERTISSEMENT de chevauchement des plages. ATTRIBUTIONS : CRUD d'adresses simples ou de sous-blocs à l'intérieur d'une plage (équipement, libellé, port UDP), aide « prochaine adresse libre ». Vue par plage avec JAUGE d'occupation (attribuées/total). Recherche « où est 239.1.2.3 ? » (plage + attribution).",
+   "v0.1.0 — RAPPROCHEMENT avec le réel : le front collecte les groupes multicast réellement actifs auprès de Monitoring 2110 (mêmes session/permissions) et le backend classe en conformes / actifs non documentés / documentés mais inactifs / actifs hors de toute plage. Dégrade proprement si Monitoring 2110 est arrêté ou inaccessible (le plan reste utilisable).",
+   "v0.1.0 — EXPORT du plan en JSON et CSV (téléchargement côté navigateur)."
+  ],
+  "Bugs connus": [
+   "Le rapprochement identifie une attribution active dès qu'un groupe actif tombe dans son adresse/sous-bloc ; il ne distingue pas les sources SSM (S,G) — l'appariement se fait sur l'adresse de groupe.",
+   "« Prochaine adresse libre » et le calcul d'occupation sont bornés (200 000 adresses balayées au plus) : sur une plage énorme et pleine, l'outil renvoie un message plutôt que de balayer tout l'espace."
+  ],
+  "Correctifs": [
+   "v0.1.1 — L'outil s'ouvrait avec ses TROIS boîtes de dialogue empilées par-dessus la page (« Nouvelle plage », « Nouvelle attribution », « Rapprochement avec le fabric »), et le champ de recherche affichait sa zone de résultats vide. Cause : `.mi-modal` et `.mi-find-res` posent `display: flex`, et une règle de classe d'auteur l'emporte sur la règle `[hidden]` du navigateur, à spécificité égale. Le JS pilotait pourtant l'attribut correctement. Correctif : `.mi-modal[hidden]` et `.mi-find-res[hidden]` en `display: none`."
+  ]
+ }
 }

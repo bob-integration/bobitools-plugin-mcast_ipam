@@ -2,7 +2,16 @@
 <div class="mi-app">
   <aside class="mi-side">
     <div class="mi-side-head">
-      <strong>Plages</strong><span class="mi-count" id="mi-count"></span>
+      <strong>Équipements</strong><span class="mi-count" id="mi-fam-count"></span>
+      <button class="btn mi-io" id="mi-rule-edit" type="button"
+              title="Régler la convention d'adressage">Règle</button>
+      <button class="btn btn-green" id="mi-fam-new" type="button" title="Nouvel équipement">+ Équipement</button>
+    </div>
+
+    <ul class="mi-ranges" id="mi-families"><li class="meta">Chargement…</li></ul>
+
+    <div class="mi-side-head mi-side-head2">
+      <strong>Plages libres</strong><span class="mi-count" id="mi-count"></span>
       <button class="btn btn-green" id="mi-range-new" type="button" title="Nouvelle plage">+ Plage</button>
     </div>
 
@@ -102,6 +111,70 @@
 </div>
 
 <!-- Modale rapprochement (résultats). -->
+<div class="mi-modal" id="mi-fam-modal" hidden>
+  <div class="mi-modal-card">
+    <h3 id="mi-fam-title">Nouvel équipement</h3>
+    <form id="mi-fam-form" class="mi-form">
+      <label>Nom<input name="name" required placeholder="ex. SNP 1"></label>
+      <div class="mi-row2">
+        <label>Famille<input name="family" type="number" min="0" max="255" required
+               class="mono" placeholder="4"></label>
+        <label>Numéro<input name="number" type="number" min="0" max="255" required
+               class="mono" placeholder="1"></label>
+        <label>Règle<select name="rule_id" id="mi-fam-rule"></select></label>
+      </div>
+      <fieldset class="mi-ess-pick">
+        <legend>Essences portées et nombre de canaux</legend>
+        <div id="mi-fam-ess"></div>
+        <label class="mi-chan">Canaux
+          <input name="channels" type="number" min="1" max="255" value="1" class="mono">
+          <span class="mi-hint">Un équipement audio seul ne réserve que ses adresses audio.</span>
+        </label>
+      </fieldset>
+      <p class="mi-hint mi-preview" id="mi-fam-preview"></p>
+      <div class="mi-row2">
+        <label>Réseaux
+          <select name="network">
+            <option value="les-deux">Rouge + Bleu</option>
+            <option value="rouge">Rouge seul</option>
+            <option value="bleu">Bleu seul</option>
+          </select>
+        </label>
+        <label>Unicast<input name="unicast" class="mono" placeholder="10.1.211.49">
+          <span class="mi-hint">Documentaire : le numéro ne s'en déduit pas.</span></label>
+      </div>
+      <label>Notes<textarea name="notes" rows="2"></textarea></label>
+      <div class="mi-modal-actions">
+        <button type="button" class="btn" id="mi-fam-cancel">Annuler</button>
+        <button type="submit" class="btn btn-green">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="mi-modal" id="mi-rule-modal" hidden>
+  <div class="mi-modal-card mi-modal-wide">
+    <h3>Convention d'adressage</h3>
+    <form id="mi-rule-form" class="mi-form">
+      <label>Nom<input name="name" required></label>
+      <p class="mi-hint mi-rule-formula">
+        Une adresse se déduit de l'équipement qui l'émet :
+        <code>239.<b>FAMILLE</b>.<b>ÉQUIPEMENT</b>.<b>FLUX</b></code>.
+        Le dernier octet dit à la fois l'essence et le rang du flux.
+      </p>
+      <div id="mi-rule-ess"></div>
+      <label>Décalage du secours 2022-7
+        <input name="offset" type="number" min="0" max="255" class="mono">
+        <span class="mi-hint">Ajouté à la famille pour le second chemin. 4 → 104.</span></label>
+      <label>Notes<textarea name="notes" rows="2"></textarea></label>
+      <div class="mi-modal-actions">
+        <button type="button" class="btn" id="mi-rule-cancel">Annuler</button>
+        <button type="submit" class="btn btn-green">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="mi-modal" id="mi-recon-modal" hidden>
   <div class="mi-modal-card mi-modal-wide">
     <h3>Rapprochement avec le fabric</h3>

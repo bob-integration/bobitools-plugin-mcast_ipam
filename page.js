@@ -12,6 +12,9 @@ window.BTTools = window.BTTools || {};
 window.BTTools.mcast_ipam = (function () {
     let EL = null, CTX = null;
     let ranges = [], overlaps = [], assignsByRange = {}, selected = null;
+    // Le plan repose d'abord sur une CONVENTION : on stocke la règle et les familles, et les
+    // adresses se calculent. Les plages manuelles ne servent plus qu'à ce qui y échappe.
+    let rules = [], equipments = [], selEquip = null;
 
     const esc = (window.BT && BT.esc) || ((s) => String(s == null ? "" : s)
         .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
@@ -23,6 +26,54 @@ window.BTTools.mcast_ipam = (function () {
         "anc-2110-40": "ANC 2110-40", "autre": "Autre",
     };
     const NET_LABEL = { "rouge": "Rouge", "bleu": "Bleu", "les-deux": "Rouge + Bleu" };
+
+    // ── Règle et familles ────────────────────────────────────
+    async function loadPlan() {
+        const r = await CTX.api("equipments");
+        equipments = r.equipments || [];
+        rules = r.rules || [];
+    }
+
+    function renderFamilies() {
+        $("#mi-fam-count").textContent = equipments.length ? "(" + equipments.length + ")" : "";
+        const ul = $("#mi-families");
+        if (!equipments.length) {
+            ul.innerHTML = '<li class="meta">Aucun équipement. Déclarez-en un : ses adresses s\'en déduiront.</li>';
+            return;
+        }
+        // La famille n'est pas un objet qu'on crée, c'est un attribut : elle sert ici de
+        // simple intertitre, reconstruit à chaque rendu depuis les équipements eux-mêmes.
+        const parFamille = new Map();
+        equipments.forEach((e) => {
+            if (!parFamille.has(e.family)) parFamille.set(e.family, []);
+            parFamille.get(e.family).push(e);
+        });
+        const familles = Array.from(parFamille.keys()).sort((a, b) => a - b);
+        ul.innerHTML = familles.map((fam) => {
+            const liste = parFamille.get(fam);
+            return '<li class="mi-fam-head meta">Famille ' + fam +
+                ' <span class="mono">239.' + fam + '.x</span></li>' +
+                liste.map((e) => {
+                    const r = ruleOf(e);
+                    const bleu = (e.network === "les-deux" || e.network === "bleu");
+                    const sec = bleu ? " + 239." + (e.family + (r.offset || 0)) + "." + e.number + ".x" : "";
+                    return '<li class="mi-range' + (e.id === selEquip ? " sel" : "") + '" data-id="' + e.id + '">' +
+                        '<div class="mi-range-top"><span class="mi-range-name">' + esc(e.name) + '</span>' +
+                        '<span class="mi-chip e-video">n° ' + e.number + '</span></div>' +
+                        '<div class="mi-range-cidr mono">239.' + e.family + "." + e.number + ".x" + esc(sec) + '</div>' +
+                        (e.unicast ? '<div class="mi-fam-sub meta mono">' + esc(e.unicast) + "</div>" : "") +
+                        '</li>';
+                }).join("");
+        }).join("");
+        ul.querySelectorAll(".mi-range").forEach((li) => li.onclick = () => selectFamily(Number(li.dataset.id)));
+    }
+
+    function ruleOf(e) { return rules.find((r) => r.id === e.rule_id) || { essences: [], offset: 0 }; }
+
+    function selectFamily(id) {
+        selEquip = id; selected = null;
+        renderFamilies(); renderRanges(); renderMain();
+    }
 
     // ── Chargement des données ───────────────────────────────
     async function loadRanges() {
@@ -84,8 +135,13 @@ window.BTTools.mcast_ipam = (function () {
     // ── Panneau principal : détail d'une plage + attributions ─
     function renderMain() {
         const main = $("#mi-main");
+        const e = equipments.find((x) => x.id === selEquip);
+        if (e) return renderEquipBlocks(main, e);
         const r = ranges.find((x) => x.id === selected);
-        if (!r) { main.innerHTML = '<div class="meta">Sélectionnez une plage à gauche, ou créez-en une.</div>'; return; }
+        if (!r) {
+            main.innerHTML = '<div class="meta">Sélectionnez un équipement à gauche, ou déclarez-en un.</div>';
+            return;
+        }
         const assigns = assignsByRange[r.id] || [];
         const used = assigns.reduce((n, a) => n + (a.size || 0), 0);
         const bounds = r.cidr || (r.start + "–" + r.end);
@@ -129,6 +185,175 @@ window.BTTools.mcast_ipam = (function () {
     }
 
     // ── Modale plage ─────────────────────────────────────────
+    // ── Adresses calculées d'un équipement ───────────────────
+    // Aucune n'est stockée : la règle les produit. Les écrire en base créerait une seconde
+    // vérité, fausse dès qu'on renumérote l'équipement.
+    function renderEquipBlocks(main, e) {
+        const rule = ruleOf(e);
+        const nets = e.network === "les-deux" ? ["rouge", "bleu"] : [e.network];
+        const par = {};
+        (e.blocks || []).forEach((b) => { par[b.essence + "|" + b.network] = b; });
+        const rows = (rule.essences || []).map((ess) => {
+            const cells = nets.map((net) => {
+                const b = par[ess.key + "|" + net];
+                if (!b) return "<td></td>";
+                return '<td><div class="mi-cell mi-net-' + net + '"><span class="mi-net-dot"></span>' +
+                    '<span class="mono">' + esc(b.start) + " – " + esc(b.end) + "</span></div></td>";
+            }).join("");
+            return "<tr><th>" + esc(ess.label) +
+                '<span class="mi-th-sub">' + ess.first + "–" + ess.last + "</span></th>" +
+                cells + '<td class="mono">' + (ess.port ? ":" + ess.port : "—") + "</td></tr>";
+        }).join("");
+        main.innerHTML =
+            '<div class="mi-main-head"><div><h3>' + esc(e.name) + "</h3>" +
+            '<div class="meta">famille ' + e.family + ", équipement " + e.number +
+            " · règle « " + esc(e.rule_name || "") + " » · " + esc(NET_LABEL[e.network] || e.network) +
+            (e.unicast ? ' · unicast <span class="mono">' + esc(e.unicast) + "</span>" : "") +
+            "</div></div>" +
+            '<div class="mi-main-actions">' +
+            '<button class="btn" id="mi-fam-edit" type="button">Modifier</button>' +
+            '<button class="btn btn-danger" id="mi-fam-del" type="button">Supprimer</button></div></div>' +
+            (e.notes ? '<p class="meta">' + esc(e.notes) + "</p>" : "") +
+            '<div class="mi-grid-wrap"><table class="mi-grid"><thead><tr><th>Essence</th>' +
+            nets.map((n) => "<th>" + (n === "rouge" ? "Rouge" : "Bleu") + "</th>").join("") +
+            "<th>Port</th></tr></thead><tbody>" +
+            (rows || '<tr><td class="mi-empty">La règle ne définit aucune essence.</td></tr>') +
+            "</tbody></table></div>";
+        $("#mi-fam-edit").onclick = () => openFamilyModal(e);
+        $("#mi-fam-del").onclick = () => delFamily(e);
+    }
+
+    function openFamilyModal(e) {
+        const m = $("#mi-fam-modal"), form = $("#mi-fam-form");
+        $("#mi-fam-title").textContent = e ? "Modifier l'équipement" : "Nouvel équipement";
+        $("#mi-fam-rule").innerHTML = rules.map((r) =>
+            '<option value="' + r.id + '">' + esc(r.name) + "</option>").join("");
+        form.reset();
+        form.dataset.id = e ? e.id : "";
+        const rule = rules.find((r) => r.id === (e ? e.rule_id : Number(form.rule_id.value))) || rules[0];
+        const prises = e && e.essences ? e.essences : (rule ? rule.essences.map((x) => x.key) : []);
+        $("#mi-fam-ess").innerHTML = (rule ? rule.essences : []).map((x) =>
+            '<label class="mi-ess-box"><input type="checkbox" value="' + esc(x.key) + '"' +
+            (prises.indexOf(x.key) >= 0 ? " checked" : "") + "> " + esc(x.label) +
+            '<span class="mi-hint"> ' + x.first + "–" + x.last + "</span></label>").join("");
+        EL.querySelectorAll("#mi-fam-ess input").forEach((c) => c.onchange = previewEquip);
+        form.channels.value = e ? e.channels : 1;
+        if (e) {
+            form.name.value = e.name;
+            form.family.value = e.family;
+            form.number.value = e.number;
+            form.network.value = e.network;
+            form.rule_id.value = e.rule_id;
+            form.unicast.value = e.unicast || "";
+            form.notes.value = e.notes || "";
+        }
+        previewEquip();
+        m.hidden = false;
+    }
+
+    // Montrer l'adresse AVANT d'enregistrer : c'est le seul moment où une erreur de numéro
+    // se voit encore, et la corriger après coup veut dire reconfigurer la machine.
+    function previewEquip() {
+        const form = $("#mi-fam-form"), out = $("#mi-fam-preview");
+        if (!form || !out) return;
+        const fam = parseInt(form.family.value, 10), num = parseInt(form.number.value, 10);
+        const rule = rules.find((r) => r.id === Number(form.rule_id.value)) || rules[0];
+        if (!rule || isNaN(fam) || isNaN(num)) { out.textContent = ""; return; }
+        const bleu = (form.network.value === "les-deux" || form.network.value === "bleu");
+        const prises = Array.from(EL.querySelectorAll("#mi-fam-ess input:checked")).map((c) => c.value);
+        const n = Math.max(1, parseInt(form.channels.value, 10) || 1);
+        const lignes = (rule.essences || []).filter((x) => prises.indexOf(x.key) >= 0).map((x) => {
+            const fin = Math.min(x.first + n - 1, x.last);
+            return '<span class="mi-prev-l">' + esc(x.label) + ' <span class="mono">239.' +
+                fam + "." + num + "." + x.first + "–" + fin + "</span>" +
+                (x.port ? ' <span class="meta">:' + x.port + "</span>" : "") + "</span>";
+        });
+        const total = lignes.length * n * (bleu && form.network.value === "les-deux" ? 2 : 1);
+        out.innerHTML = lignes.length
+            ? lignes.join("") + '<span class="mi-prev-tot">' + total + " adresses réservées" +
+              (bleu ? ", secours en 239." + (fam + rule.offset) + "." + num + ".x" : "") + "</span>"
+            : "Choisissez au moins une essence.";
+    }
+
+    async function submitFamily(ev) {
+        ev.preventDefault();
+        const form = ev.target, id = form.dataset.id;
+        const body = {
+            name: form.name.value.trim(), family: form.family.value,
+            number: form.number.value, network: form.network.value,
+            rule_id: form.rule_id.value, unicast: form.unicast.value.trim(),
+            essences: Array.from(EL.querySelectorAll("#mi-fam-ess input:checked")).map((c) => c.value),
+            channels: form.channels.value, notes: form.notes.value.trim(),
+        };
+        try {
+            const r = await CTX.api(id ? "equipments/" + id : "equipments",
+                                    { method: id ? "PUT" : "POST", body: body });
+            m_hide("#mi-fam-modal");
+            await loadPlan();
+            selEquip = id ? Number(id) : (r && r.id) || selEquip;
+            renderFamilies(); renderMain();
+            CTX.toast(id ? "Équipement modifié." : "Équipement créé.", "success");
+        } catch (e) { CTX.toast(e.message, "error"); }
+    }
+
+    async function delFamily(e) {
+        if (!confirm("Supprimer « " + e.name + " » ? Ses adresses ne seront plus reconnues.")) return;
+        try {
+            await CTX.api("equipments/" + e.id, { method: "DELETE" });
+            selEquip = null;
+            await loadPlan();
+            renderFamilies(); renderMain();
+            CTX.toast("Équipement supprimé.", "success");
+        } catch (err) { CTX.toast(err.message, "error"); }
+    }
+
+    const m_hide = (sel) => { const el = $(sel); if (el) el.hidden = true; };
+
+    // ── Réglage de la convention ─────────────────────────────
+    function openRuleModal() {
+        const rule = rules[0];
+        if (!rule) { CTX.toast("Aucune règle à modifier.", "error"); return; }
+        const form = $("#mi-rule-form");
+        form.dataset.id = rule.id;
+        form.name.value = rule.name;
+        form.offset.value = rule.offset;
+        form.notes.value = rule.notes || "";
+        $("#mi-rule-ess").innerHTML =
+            '<table class="mi-ess"><thead><tr><th>Essence</th><th>Du</th><th>Au</th><th>Port UDP</th></tr></thead><tbody>' +
+            (rule.essences || []).map((e) =>
+                '<tr data-key="' + esc(e.key) + '">' +
+                '<td><input class="mi-e-label" value="' + esc(e.label) + '"></td>' +
+                '<td><input class="mi-e-first mono" type="number" min="0" max="255" value="' + e.first + '"></td>' +
+                '<td><input class="mi-e-last mono" type="number" min="0" max="255" value="' + e.last + '"></td>' +
+                '<td><input class="mi-e-port mono" type="number" min="1" max="65535" value="' +
+                (e.port == null ? "" : e.port) + '"></td></tr>').join("") +
+            "</tbody></table>";
+        $("#mi-rule-modal").hidden = false;
+    }
+
+    async function submitRule(ev) {
+        ev.preventDefault();
+        const form = ev.target;
+        const essences = Array.from(EL.querySelectorAll("#mi-rule-ess tbody tr")).map((tr) => ({
+            key: tr.dataset.key,
+            label: tr.querySelector(".mi-e-label").value.trim(),
+            first: tr.querySelector(".mi-e-first").value,
+            last: tr.querySelector(".mi-e-last").value,
+            port: tr.querySelector(".mi-e-port").value,
+        }));
+        try {
+            await CTX.api("rules/" + form.dataset.id, {
+                method: "PUT",
+                body: { name: form.name.value.trim(), offset: form.offset.value,
+                        notes: form.notes.value.trim(), essences: essences },
+            });
+            m_hide("#mi-rule-modal");
+            await loadPlan();
+            renderFamilies(); renderMain();
+            CTX.toast("Convention enregistrée.", "success");
+        } catch (e) { CTX.toast(e.message, "error"); }
+    }
+
     function openRangeModal(r) {
         const m = $("#mi-range-modal"), f = $("#mi-range-form");
         f.reset();
@@ -318,6 +543,21 @@ window.BTTools.mcast_ipam = (function () {
                 byGroup.set(g.group, { group: g.group, vlan: g.vlan, source: g.source || "" });
             }
         }
+        // Le relevé des switchs donne l'adresse et la source, jamais le SENS ni le port UDP.
+        // Or c'est le sens qui sépare un défaut de configuration chez nous d'un flux tiers
+        // qui n'a pas à suivre notre plan. Monitoring 2110 le sait, par les SDP des IPG :
+        // on enrichit donc chaque groupe quand il répond, et on s'en passe sinon.
+        try {
+            const ipg = await BT.fetchJSON("/api/tools/monitoring_2110/ipg");
+            for (const x of (ipg && ipg.apparies) || []) {
+                const g = byGroup.get(x.group);
+                if (!g) continue;
+                g.sens = x.sens || "";
+                g.port = x.port == null ? null : x.port;
+                g.signal = x.signal || "";
+                g.kind = x.kind || "";
+            }
+        } catch (e) { /* enrichissement facultatif : le rapprochement reste possible sans */ }
         return { groups: Array.from(byGroup.values()), failed: failed };
     }
     function reconMessage(e) {
@@ -338,8 +578,8 @@ window.BTTools.mcast_ipam = (function () {
             return;
         }
         try {
-            const r = await CTX.api("reconcile", { body: { active, failed } });
-            renderRecon(r);
+            const r = await CTX.api("reconcile-rule", { body: { active, failed } });
+            renderReconRule(r);
         } catch (e) {
             body.innerHTML = '<div class="mi-recon-fail">' + esc(e.message) + '</div>';
         }
@@ -350,6 +590,49 @@ window.BTTools.mcast_ipam = (function () {
             (items.length ? '<ul>' + items.map(render).join("") + '</ul>' : '<div class="meta">—</div>') +
             '</details>';
     }
+    // Cinq catégories, dont deux qui n'appellent AUCUNE action : les sources extérieures et
+    // les équipements non recensés. Les mêler aux défauts ferait passer 11 lignes de bruit
+    // devant les 3 qui comptent.
+    function renderReconRule(r) {
+        const s = r.resume || {};
+        const ligne = (x) =>
+            '<li><span class="mono">' + esc(x.group) + "</span>" +
+            (x.signal ? ' <span class="mi-recon-lbl">' + esc(x.signal) + "</span>" : "") +
+            (x.equipment_name ? ' <span class="meta">' + esc(x.equipment_name) + "</span>" : "") +
+            "</li>";
+        const ligneEcart = (x) =>
+            '<li><span class="mono">' + esc(x.group) + "</span>" +
+            (x.signal ? ' <span class="mi-recon-lbl">' + esc(x.signal) + "</span>" : "") +
+            ' <span class="mi-recon-why">port ' + esc(String(x.port)) +
+            ", attendu " + esc(String(x.port_attendu)) + "</span></li>";
+        const ligneExt = (x) =>
+            '<li><span class="mono">' + esc(x.group) + "</span>" +
+            (x.signal ? ' <span class="mi-recon-lbl">' + esc(x.signal) + "</span>" : "") +
+            (x.port ? ' <span class="meta">port ' + esc(String(x.port)) + "</span>" : "") + "</li>";
+        const ligneEquip = (x) =>
+            '<li><span class="mono">' + esc(x.group) + "</span>" +
+            ' <span class="mi-recon-why">équipement ' + esc(String(x.equipment)) +
+            " absent de « " + esc(x.family_name || "") + " »</span></li>";
+
+        $("#mi-recon-body").innerHTML =
+            '<div class="mi-recon-sum">' + (s.actifs || 0) + " groupes actifs · " +
+            (s.conformes || 0) + " conformes à la convention</div>" +
+            (r.failed && r.failed.length
+                ? '<div class="mi-recon-fail">⚠ ' + r.failed.length +
+                  " switch(s) non lus : la liste est incomplète.<br><span class=\"meta\">" +
+                  esc(r.failed.map((f) => f.name || f.id).join(", ")) + "</span></div>"
+                : "") +
+            reconSection("⚠ Non conformes — à corriger", "sec-warn", r.a_corriger || [], ligneEcart) +
+            reconSection("⚑ Actifs hors de toute famille", "sec-out", r.hors_plan || [], ligneExt) +
+            reconSection("＋ Équipements présents non recensés", "sec-undoc", r.equipements_inconnus || [], ligneEquip) +
+            reconSection("＋ Actifs au-delà du déclaré", "sec-undoc", r.non_declares || [],
+                (x) => '<li><span class="mono">' + esc(x.group) + "</span>" +
+                    (x.signal ? ' <span class="mi-recon-lbl">' + esc(x.signal) + "</span>" : "") +
+                    ' <span class="mi-recon-why">' + esc(x.motif || "") + "</span></li>") +
+            reconSection("○ Sources extérieures", "sec-inactive", r.exterieurs || [], ligneExt) +
+            reconSection("✓ Conformes", "sec-ok", r.conformes || [], ligne);
+    }
+
     function renderRecon(r) {
         const s = r.summary || {};
         const g = (x) => '<span class="mono">' + esc(x.group) + '</span>' +
@@ -414,11 +697,28 @@ window.BTTools.mcast_ipam = (function () {
         $("#mi-recon-close").onclick = () => { $("#mi-recon-modal").hidden = true; };
         $("#mi-exp-json").onclick = () => exportPlan("json");
         $("#mi-exp-csv").onclick = () => exportPlan("csv");
+        $("#mi-fam-new").onclick = () => openFamilyModal(null);
+        $("#mi-fam-cancel").onclick = () => m_hide("#mi-fam-modal");
+        $("#mi-fam-form").onsubmit = submitFamily;
+        ["family", "number", "network", "rule_id", "channels"].forEach((n) => {
+            const el = $('#mi-fam-form [name="' + n + '"]');
+            if (el) el.oninput = el.onchange = previewEquip;
+        });
+        $("#mi-rule-edit").onclick = openRuleModal;
+        $("#mi-rule-cancel").onclick = () => m_hide("#mi-rule-modal");
+        $("#mi-rule-form").onsubmit = submitRule;
         // Fermeture des modales par clic sur le fond.
         $$(".mi-modal").forEach((m) => m.onclick = (e) => { if (e.target === m) m.hidden = true; });
+        // La règle et les familles portent le plan : elles se chargent d'abord. Un échec sur
+        // les plages manuelles ne doit pas empêcher la grille de s'afficher, ni l'inverse.
+        loadPlan().then(() => { renderFamilies(); renderMain(); })
+            .catch((e) => CTX.toast(e.message, "error"));
         loadRanges().catch((e) => CTX.toast(e.message, "error"));
     }
-    function unmount() { EL = null; CTX = null; ranges = []; assignsByRange = {}; selected = null; }
+    function unmount() {
+        EL = null; CTX = null; ranges = []; assignsByRange = {}; selected = null;
+        rules = []; equipments = []; selEquip = null;
+    }
 
     return { mount, unmount };
 })();

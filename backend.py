@@ -42,6 +42,15 @@ import time
 
 RANGE_SCOPE = "range"
 ASSIGN_SCOPE = "assign"
+# Un fabric dont l'adressage suit une convention n'a pas besoin qu'on énumère ses plages : la
+# convention SUFFIT à dire où va chaque flux. On stocke donc la RÈGLE et les FAMILLES, et la
+# grille des adresses se calcule. Les plages manuelles restent disponibles pour tout ce qui
+# échappe à la convention.
+RULE_SCOPE = "rule"
+# L'objet qu'on crée est l'ÉQUIPEMENT — c'est lui qu'on branche, qu'on nomme et qu'on
+# renumérote. La « famille » n'est pas une chose qu'on déclare : c'est un attribut de
+# l'équipement, et le regroupement s'en déduit à l'affichage.
+EQUIP_SCOPE = "equipment"
 
 # Bloc multicast IPv4 : 224.0.0.0/4 (224.0.0.0 – 239.255.255.255).
 _MCAST_NET = ipaddress.ip_network("224.0.0.0/4")
@@ -280,6 +289,301 @@ def _validate_assign(payload, ctx, ranges, self_id=None):
     return value, name
 
 
+
+# ─── Règles d'adressage et familles ───────────────────────────────────────────
+#
+# Une RÈGLE décrit comment une adresse multicast se déduit de l'équipement qui l'émet :
+# `239.FAMILLE.ÉQUIPEMENT.FLUX`, le dernier octet désignant à la fois l'essence et le rang du
+# flux. Une FAMILLE instancie la règle pour un groupe d'équipements. Mesuré sur le parc le
+# 2026-09-17 : 392 adresses sur 392 respectent cette forme, et 384 secours sur 384 valent bien
+# famille + 100. C'est cette régularité qui rend le calcul préférable à la saisie.
+
+RULE_DEFAULT_NAME = "Convention Bobi"
+
+# Essences de la convention maison. `first`/`last` bornent le dernier octet, `port` est le
+# port UDP attendu. L'ordre compte : il fixe l'ordre d'affichage de la grille.
+RULE_DEFAULT_ESSENCES = [
+    {"key": "video", "label": "Vidéo", "first": 1, "last": 50, "port": 2120},
+    {"key": "anc", "label": "ANC", "first": 51, "last": 100, "port": 2140},
+    {"key": "audio1", "label": "Audio 1", "first": 101, "last": 150, "port": 2130},
+    {"key": "audio2", "label": "Audio 2", "first": 201, "last": 250, "port": 2130},
+]
+RULE_DEFAULT_OFFSET = 100        # secours 2022-7 : même adresse, famille + 100
+
+
+def _rule_value(payload, base=None):
+    """Valide une règle. Lève ValueError avec un message destiné à l'opérateur."""
+    base = base or {}
+    ess = payload.get("essences", base.get("essences") or RULE_DEFAULT_ESSENCES)
+    if not isinstance(ess, list) or not ess:
+        raise ValueError("au moins une essence est requise")
+    propre = []
+    for e in ess:
+        if not isinstance(e, dict):
+            raise ValueError("essence mal formée")
+        cle = (e.get("key") or "").strip()
+        if not cle:
+            raise ValueError("chaque essence a besoin d'une clé")
+        try:
+            first, last = int(e.get("first")), int(e.get("last"))
+        except (TypeError, ValueError):
+            raise ValueError("bornes d'essence non numériques (%s)" % cle)
+        if not (0 <= first <= last <= 255):
+            raise ValueError("bornes hors 0–255 pour « %s »" % cle)
+        port = e.get("port")
+        port = int(port) if port not in (None, "", "null") else None
+        if port is not None and not (0 < port < 65536):
+            raise ValueError("port UDP invalide pour « %s »" % cle)
+        propre.append({"key": cle, "label": (e.get("label") or cle).strip(),
+                       "first": first, "last": last, "port": port})
+    # Deux essences qui se recouvrent rendraient l'appartenance d'une adresse ambiguë : on
+    # refuse, plutôt que de laisser la première gagner en silence.
+    for i, a in enumerate(propre):
+        for b in propre[i + 1:]:
+            if a["first"] <= b["last"] and b["first"] <= a["last"]:
+                raise ValueError("les essences « %s » et « %s » se recouvrent"
+                                 % (a["label"], b["label"]))
+    off = payload.get("offset", base.get("offset", RULE_DEFAULT_OFFSET))
+    try:
+        off = int(off)
+    except (TypeError, ValueError):
+        raise ValueError("décalage de secours non numérique")
+    if not (0 <= off <= 255):
+        raise ValueError("décalage de secours hors 0–255")
+    return {"essences": propre, "offset": off,
+            "notes": (payload.get("notes", base.get("notes", "")) or "").strip()}
+
+
+def _rule_out(row):
+    v = row.get("value") or {}
+    return {"id": row.get("id"), "name": row.get("name"), "essences": v.get("essences") or [],
+            "offset": v.get("offset", RULE_DEFAULT_OFFSET), "notes": v.get("notes") or ""}
+
+
+def _list_rules(ctx):
+    return [_rule_out(r) for r in ctx.store.list(RULE_SCOPE)]
+
+
+def _ensure_default_rule(ctx):
+    """Crée la convention maison au premier accès, et une seule fois.
+
+    Un registre vide n'apprend rien à personne : la règle par défaut est celle qu'on a
+    mesurée sur le fabric, donc immédiatement juste. Elle reste entièrement modifiable."""
+    if ctx.store.list(RULE_SCOPE):
+        return
+    ctx.store.create(RULE_DEFAULT_NAME,
+                     {"essences": RULE_DEFAULT_ESSENCES, "offset": RULE_DEFAULT_OFFSET,
+                      "notes": "Convention mesurée sur le fabric : 392 adresses sur 392 "
+                               "conformes, 384 secours sur 384."},
+                     scope=RULE_SCOPE)
+    ctx.audit("rule_seed", RULE_DEFAULT_NAME)
+
+
+def _parse_equipments(brut):
+    """« 1,2,3 » ou « 1-16 » ou « 1-3,7,10-12 » → [1,2,3,…]. Ordonné, sans doublon."""
+    if isinstance(brut, list):
+        sortie = []
+        for x in brut:
+            try:
+                sortie.append(int(x))
+            except (TypeError, ValueError):
+                raise ValueError("numéro d'équipement non numérique : %r" % (x,))
+        vus = sorted(set(sortie))
+    else:
+        vus = set()
+        for morceau in str(brut or "").replace(";", ",").split(","):
+            morceau = morceau.strip()
+            if not morceau:
+                continue
+            if "-" in morceau:
+                a, _, b = morceau.partition("-")
+                try:
+                    a, b = int(a), int(b)
+                except ValueError:
+                    raise ValueError("intervalle d'équipements illisible : « %s »" % morceau)
+                if a > b:
+                    raise ValueError("intervalle inversé : « %s »" % morceau)
+                vus.update(range(a, b + 1))
+            else:
+                try:
+                    vus.add(int(morceau))
+                except ValueError:
+                    raise ValueError("numéro d'équipement illisible : « %s »" % morceau)
+        vus = sorted(vus)
+    if not vus:
+        raise ValueError("aucun équipement")
+    hors = [x for x in vus if not (0 <= x <= 255)]
+    if hors:
+        raise ValueError("numéro d'équipement hors 0–255 : %s" % hors[0])
+    return vus
+
+
+def _equip_value(payload, rules, base=None):
+    base = base or {}
+    rid = payload.get("rule_id", base.get("rule_id"))
+    try:
+        rid = int(rid)
+    except (TypeError, ValueError):
+        raise ValueError("règle non précisée")
+    if not any(r["id"] == rid for r in rules):
+        raise ValueError("règle introuvable")
+    fam = payload.get("family", base.get("family"))
+    num = payload.get("number", base.get("number"))
+    try:
+        fam, num = int(fam), int(num)
+    except (TypeError, ValueError):
+        raise ValueError("famille et numéro d'équipement doivent être des nombres")
+    if not (0 <= fam <= 255):
+        raise ValueError("famille hors 0–255")
+    if not (0 <= num <= 255):
+        raise ValueError("numéro d'équipement hors 0–255")
+    network = (payload.get("network", base.get("network", "les-deux")) or "les-deux").strip()
+    if network not in NETWORKS:
+        raise ValueError("réseau inconnu")
+    # L'unicast est DOCUMENTAIRE : mesuré sur le parc, le numéro d'équipement ne s'en déduit
+    # pas (10.1.211.49 porte le multicast 239.4.1.x). Le calculer produirait des adresses
+    # fausses ; on se contente donc de le retenir, pour retrouver la machine.
+    uni = (payload.get("unicast", base.get("unicast", "")) or "").strip()
+    if uni:
+        try:
+            ipaddress.ip_address(uni)
+        except ValueError:
+            raise ValueError("adresse unicast invalide")
+    # Un équipement ne porte pas forcément toutes les essences, ni toute l'étendue qui leur
+    # est ouverte : un boîtier purement audio n'a que faire de 50 adresses vidéo. On réserve
+    # donc ce qu'il a — le reste de la plage demeure libre pour un autre.
+    regle = next(r for r in rules if r["id"] == rid)
+    dispo = [e["key"] for e in regle["essences"]]
+    choisies = payload.get("essences", base.get("essences"))
+    if choisies is None:
+        choisies = dispo
+    if not isinstance(choisies, list) or not choisies:
+        raise ValueError("au moins une essence est requise")
+    inconnues = [k for k in choisies if k not in dispo]
+    if inconnues:
+        raise ValueError("essence absente de la règle : %s" % inconnues[0])
+    choisies = [k for k in dispo if k in choisies]      # ordre de la règle, sans doublon
+    canaux = payload.get("channels", base.get("channels", 1))
+    try:
+        canaux = int(canaux)
+    except (TypeError, ValueError):
+        raise ValueError("nombre de canaux non numérique")
+    if canaux < 1:
+        raise ValueError("au moins un canal")
+    # La plus étroite des essences retenues fixe le plafond : au-delà, l'adresse déborderait
+    # sur l'essence suivante et changerait de sens.
+    for e in regle["essences"]:
+        if e["key"] in choisies:
+            place = e["last"] - e["first"] + 1
+            if canaux > place:
+                raise ValueError("« %s » n'offre que %d canaux (%d–%d)"
+                                 % (e["label"], place, e["first"], e["last"]))
+    return {"rule_id": rid, "family": fam, "number": num, "network": network,
+            "unicast": uni, "essences": choisies, "channels": canaux,
+            "notes": (payload.get("notes", base.get("notes", "")) or "").strip()}
+
+
+def _equip_out(row):
+    v = row.get("value") or {}
+    return {"id": row.get("id"), "name": row.get("name"), "rule_id": v.get("rule_id"),
+            "family": v.get("family"), "number": v.get("number"),
+            "network": v.get("network") or "les-deux", "unicast": v.get("unicast") or "",
+            "essences": v.get("essences"), "channels": v.get("channels") or 1,
+            "notes": v.get("notes") or ""}
+
+
+def _list_equipments(ctx):
+    return sorted((_equip_out(r) for r in ctx.store.list(EQUIP_SCOPE)),
+                  key=lambda e: (e["family"] or 0, e["number"] or 0))
+
+
+def _blocks(rule, equip):
+    """Adresses d'UN équipement : un bloc par essence et par réseau. Jamais stockées."""
+    reseaux = []
+    if equip["network"] in ("rouge", "les-deux"):
+        reseaux.append(("rouge", equip["family"]))
+    if equip["network"] in ("bleu", "les-deux"):
+        reseaux.append(("bleu", equip["family"] + rule["offset"]))
+    # Un équipement antérieur au choix des essences n'en déclare aucune : il les prend
+    # toutes, comme avant, plutôt que de disparaître de la grille.
+    choisies = equip.get("essences") or [e["key"] for e in rule["essences"]]
+    canaux = equip.get("channels") or 1
+    blocs = []
+    for ess in rule["essences"]:
+        if ess["key"] not in choisies:
+            continue
+        fin = min(ess["first"] + canaux - 1, ess["last"])
+        for reseau, octet in reseaux:
+            if not (0 <= octet <= 255):
+                continue
+            blocs.append({"essence": ess["key"], "essence_label": ess["label"],
+                          "network": reseau, "port": ess["port"],
+                          "start": "239.%d.%d.%d" % (octet, equip["number"], ess["first"]),
+                          "end": "239.%d.%d.%d" % (octet, equip["number"], fin),
+                          "size": fin - ess["first"] + 1})
+    return blocs
+
+
+def _plan_index(rules, equipments):
+    """{(octet_famille, numéro): (équipement, règle, réseau)} pour reconnaître une adresse.
+
+    Le réseau se déduit de l'octet : le bloc décalé est le secours, par construction."""
+    par_id = {r["id"]: r for r in rules}
+    idx, familles = {}, {}
+    for e in equipments:
+        r = par_id.get(e["rule_id"])
+        if not r:
+            continue
+        paires = []
+        if e["network"] in ("rouge", "les-deux"):
+            paires.append((e["family"], "rouge"))
+        if e["network"] in ("bleu", "les-deux"):
+            paires.append((e["family"] + r["offset"], "bleu"))
+        for octet, reseau in paires:
+            idx[(octet, e["number"])] = (e, r, reseau)
+            familles.setdefault(octet, (e["family"], r, reseau))
+    return idx, familles
+
+
+def _reconnaitre(group, idx, familles):
+    """Ce que la convention dit d'une adresse : équipement, essence, port attendu.
+
+    Trois issues distinctes, et c'est voulu : adresse d'un équipement connu, adresse d'une
+    famille connue sur un équipement qu'on n'a pas recensé (du matériel présent, pas une
+    faute), ou adresse étrangère au plan."""
+    try:
+        o = [int(x) for x in str(group).split(".")]
+    except ValueError:
+        return None
+    if len(o) != 4 or o[0] != 239:
+        return None
+    trouve = idx.get((o[1], o[2]))
+    if not trouve:
+        fam = familles.get(o[1])
+        if not fam:
+            return None
+        return {"equip": None, "rule": fam[1], "network": fam[2], "family": fam[0],
+                "number": o[2], "essence": None, "port": None, "known": False}
+    equip, regle, reseau = trouve
+    choisies = equip.get("essences") or [e["key"] for e in regle["essences"]]
+    canaux = equip.get("channels") or 1
+    for ess in regle["essences"]:
+        if ess["first"] <= o[3] <= ess["last"]:
+            # Trois cas à ne pas confondre : l'essence n'est pas portée par cet équipement,
+            # elle l'est mais au-delà des canaux déclarés, ou tout est en ordre. Seul le
+            # premier relève de la convention ; les deux autres disent que le plan est en
+            # retard sur le matériel, ce qui se corrige dans le plan, pas dans l'équipement.
+            return {"equip": equip, "rule": regle, "network": reseau,
+                    "family": equip["family"], "number": equip["number"],
+                    "essence": ess, "port": ess["port"], "known": True,
+                    "essence_declaree": ess["key"] in choisies,
+                    "canal": o[3] - ess["first"] + 1,
+                    "canal_declare": (o[3] - ess["first"] + 1) <= canaux,
+                    "canaux_declares": canaux}
+    return {"equip": equip, "rule": regle, "network": reseau, "family": equip["family"],
+            "number": equip["number"], "essence": None, "port": None, "known": True}
+
+
 # ─── Rapprochement avec le réel ───────────────────────────────────────────────
 
 def _reconcile(active, ranges, assigns, failed=None):
@@ -400,9 +704,198 @@ def _export_csv(ranges, assigns):
 
 # ─── Routage ──────────────────────────────────────────────────────────────────
 
+def _reconcile_regle(active, rules, equipments, failed=None):
+    """Confronte les groupes ACTIFS à la règle, plutôt qu'à des plages énumérées.
+
+    Le SENS est déterminant, et c'est pourquoi le front l'achemine jusqu'ici. Un flux que NOS
+    équipements émettent hors convention est un défaut à corriger — il porte notre nom. Un flux
+    que nous RECEVONS d'un tiers n'a aucune raison de suivre notre plan : le ranger parmi les
+    anomalies noierait les vrais défauts sous du bruit qui n'appelle aucune action.
+
+    Cinq catégories, dont l'une dit explicitement ce qu'on n'a pas pu voir."""
+    idx, familles = _plan_index(rules, equipments)
+    vus, act = set(), []
+    for g in active or []:
+        grp = (g.get("group") or "").strip()
+        if not grp or grp in vus:
+            continue
+        try:
+            _v4_int(grp)
+        except ValueError:
+            continue
+        vus.add(grp)
+        act.append(g)
+
+    conformes, a_corriger, exterieurs, hors_plan, inconnus = [], [], [], [], []
+    non_declares = []
+    for g in act:
+        grp = (g.get("group") or "").strip()
+        sens = (g.get("sens") or "").strip()
+        port = g.get("port")
+        port = int(port) if str(port or "").isdigit() else None
+        base = {"group": grp, "vlan": g.get("vlan"), "source": (g.get("source") or "").strip(),
+                "signal": g.get("signal") or "", "sens": sens, "kind": g.get("kind") or "",
+                "port": port}
+        vu = _reconnaitre(grp, idx, familles)
+        if not vu:
+            (exterieurs if sens == "recu" else hors_plan).append(base)
+            continue
+        info = {**base, "family": vu["family"], "equipment": vu["number"],
+                "network": vu["network"],
+                "equipment_name": (vu["equip"] or {}).get("name", ""),
+                "essence": (vu["essence"] or {}).get("key"),
+                "essence_label": (vu["essence"] or {}).get("label"),
+                "port_attendu": vu["port"]}
+        if not vu["known"]:
+            # L'adresse relève d'une famille connue, mais d'un équipement qu'on n'a jamais
+            # déclaré : c'est du matériel présent et non recensé, pas une violation.
+            inconnus.append(info)
+            continue
+        if vu["essence"] is None:
+            (exterieurs if sens == "recu" else hors_plan).append(info)
+            continue
+        info["canal"] = vu.get("canal")
+        info["canaux_declares"] = vu.get("canaux_declares")
+        if not vu.get("essence_declaree", True):
+            (exterieurs if sens == "recu" else non_declares).append(
+                {**info, "motif": "essence non déclarée sur cet équipement"})
+            continue
+        if not vu.get("canal_declare", True):
+            (exterieurs if sens == "recu" else non_declares).append(
+                {**info, "motif": "canal %d, au-delà des %d déclarés"
+                                  % (vu.get("canal") or 0, vu.get("canaux_declares") or 0)})
+            continue
+        if vu["port"] is not None and port is not None and port != vu["port"]:
+            (exterieurs if sens == "recu" else a_corriger).append(info)
+            continue
+        conformes.append(info)
+
+    return {"conformes": conformes, "a_corriger": a_corriger, "exterieurs": exterieurs,
+            "hors_plan": hors_plan, "equipements_inconnus": inconnus,
+            "non_declares": non_declares, "failed": list(failed or []),
+            "resume": {"actifs": len(act), "conformes": len(conformes),
+                       "a_corriger": len(a_corriger), "exterieurs": len(exterieurs),
+                       "hors_plan": len(hors_plan), "inconnus": len(inconnus),
+                       "non_declares": len(non_declares),
+                       "switchs_non_lus": len(failed or [])}}
+
+
 def api(path, method, payload, ctx):
     parts = [p for p in (path or "").split("/") if p]
     payload = payload or {}
+
+    # ── Règles d'adressage ──
+    if parts == ["rules"]:
+        if method == "GET":
+            _ensure_default_rule(ctx)
+            return {"rules": _list_rules(ctx)}
+        if method == "POST":
+            name = (payload.get("name") or "").strip()
+            if not name:
+                return 400, {"error": "nom de règle requis"}
+            try:
+                value = _rule_value(payload)
+            except ValueError as e:
+                return 400, {"error": str(e)}
+            rid = ctx.store.create(name, value, scope=RULE_SCOPE)
+            ctx.audit("rule_create", name)
+            return {"id": rid}
+        return 405, {"error": "méthode non permise"}
+
+    if len(parts) == 2 and parts[0] == "rules":
+        try:
+            rid = int(parts[1])
+        except ValueError:
+            return 400, {"error": "identifiant invalide"}
+        row = ctx.store.get(rid)
+        if not row or row.get("scope") != RULE_SCOPE:
+            return 404, {"error": "règle introuvable"}
+        if method == "PUT":
+            name = (payload.get("name") or row.get("name") or "").strip()
+            if not name:
+                return 400, {"error": "nom de règle requis"}
+            try:
+                value = _rule_value(payload, base=row.get("value") or {})
+            except ValueError as e:
+                return 400, {"error": str(e)}
+            ctx.store.update(rid, name=name, value=value)
+            ctx.audit("rule_update", name)
+            return {"ok": True}
+        if method == "DELETE":
+            # Une famille orpheline ne saurait plus calculer ses adresses : on refuse plutôt
+            # que de laisser un plan à moitié interprétable.
+            liees = [e for e in _list_equipments(ctx) if e["rule_id"] == rid]
+            if liees:
+                return 409, {"error": "%d équipement(s) utilisent cette règle" % len(liees),
+                             "equipments": [e["name"] for e in liees]}
+            ctx.store.delete(rid)
+            ctx.audit("rule_delete", row.get("name") or str(rid))
+            return {"ok": True}
+        return 405, {"error": "méthode non permise"}
+
+    # ── Équipements ──
+    if parts == ["equipments"]:
+        if method == "GET":
+            _ensure_default_rule(ctx)
+            rules = _list_rules(ctx)
+            par_id = {r["id"]: r for r in rules}
+            eqs = _list_equipments(ctx)
+            for e in eqs:
+                r = par_id.get(e["rule_id"])
+                e["blocks"] = _blocks(r, e) if r else []
+                e["rule_name"] = r["name"] if r else ""
+            return {"equipments": eqs, "rules": rules}
+        if method == "POST":
+            name = (payload.get("name") or "").strip()
+            if not name:
+                return 400, {"error": "nom d'équipement requis"}
+            try:
+                value = _equip_value(payload, _list_rules(ctx))
+            except ValueError as e:
+                return 400, {"error": str(e)}
+            for e in _list_equipments(ctx):
+                if (e["family"], e["number"]) == (value["family"], value["number"]):
+                    return 409, {"error": "239.%d.%d.x est déjà pris par « %s »"
+                                          % (value["family"], value["number"], e["name"])}
+            eid = ctx.store.create(name, value, scope=EQUIP_SCOPE)
+            ctx.audit("equipment_create", "%s (239.%d.%d.x)"
+                      % (name, value["family"], value["number"]))
+            return {"id": eid}
+        return 405, {"error": "méthode non permise"}
+
+    if len(parts) == 2 and parts[0] == "equipments":
+        try:
+            eid = int(parts[1])
+        except ValueError:
+            return 400, {"error": "identifiant invalide"}
+        row = ctx.store.get(eid)
+        if not row or row.get("scope") != EQUIP_SCOPE:
+            return 404, {"error": "équipement introuvable"}
+        if method == "PUT":
+            name = (payload.get("name") or row.get("name") or "").strip()
+            if not name:
+                return 400, {"error": "nom d'équipement requis"}
+            try:
+                value = _equip_value(payload, _list_rules(ctx), base=row.get("value") or {})
+            except ValueError as e:
+                return 400, {"error": str(e)}
+            for e in _list_equipments(ctx):
+                if e["id"] != eid and (e["family"], e["number"]) == (value["family"], value["number"]):
+                    return 409, {"error": "239.%d.%d.x est déjà pris par « %s »"
+                                          % (value["family"], value["number"], e["name"])}
+            ctx.store.update(eid, name=name, value=value)
+            ctx.audit("equipment_update", name)
+            return {"ok": True}
+        if method == "DELETE":
+            ctx.store.delete(eid)
+            ctx.audit("equipment_delete", row.get("name") or str(eid))
+            return {"ok": True}
+        return 405, {"error": "méthode non permise"}
+
+    if parts == ["reconcile-rule"] and method == "POST":
+        _ensure_default_rule(ctx)
+        return _reconcile_regle(payload.get("active") or [], _list_rules(ctx),
+                                _list_equipments(ctx), payload.get("failed") or [])
 
     # ── Plages ──
     if parts == ["ranges"]:

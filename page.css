@@ -80,6 +80,12 @@
 .mono { font-family: var(--font-mono); }
 
 /* ── Modales ── */
+/* `hidden` doit l'emporter sur les `display` posés plus bas. Une règle de CLASSE écrite ici
+   bat la règle `[hidden]` du navigateur — à spécificité égale, la feuille
+   d'auteur gagne — et les trois dialogues s'affichaient donc tous dès l'ouverture de l'outil,
+   empilés par-dessus la page. Le JS, lui, pilote correctement l'attribut. */
+.mi-modal[hidden], .mi-find-res[hidden] { display: none; }
+
 .mi-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 40;
     display: flex; align-items: center; justify-content: center; padding: 20px; }
 .mi-modal-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
@@ -121,3 +127,55 @@
     .mi-app { grid-template-columns: 1fr; }
     .mi-row2 { grid-template-columns: 1fr; }
 }
+
+/* ── Grille calculée d'une famille ── */
+/* Aucune de ces adresses n'est stockée : la règle les produit. La grille est donc une VUE,
+   et son en-tête rappelle les bornes de chaque essence pour qu'on puisse la relire sans
+   rouvrir la convention. */
+.mi-side-head2 { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+.mi-fam-sub { font-size: 0.8em; margin-top: 2px; }
+.mi-main-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.mi-main-head h3 { margin: 0 0 2px; }
+.mi-main-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.mi-grid-wrap { overflow-x: auto; margin-top: 14px; }
+.mi-grid { border-collapse: collapse; width: 100%; font-size: 0.86em; }
+.mi-grid th, .mi-grid td { border: 1px solid var(--border-soft); padding: 6px 9px; text-align: left;
+    vertical-align: top; }
+.mi-grid thead th { background: var(--bg-soft); white-space: nowrap; }
+.mi-th-sub { display: block; font-weight: 400; color: var(--text-muted); font-size: 0.85em; }
+.mi-eq { white-space: nowrap; background: var(--bg-soft); }
+.mi-eq-name { display: block; font-weight: 400; color: var(--text-muted); font-size: 0.85em; }
+.mi-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.mi-cell + .mi-cell { margin-top: 3px; }
+/* Le rouge et le bleu sont des NOMS de réseaux, pas un code d'état : la pastille les
+   distingue sans teinter le texte, qui reste lisible dans les deux thèmes. */
+.mi-net-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.mi-net-rouge .mi-net-dot { background: oklch(0.62 0.19 25); }
+.mi-net-bleu .mi-net-dot { background: oklch(0.62 0.16 250); }
+.mi-empty { color: var(--text-muted); }
+.mi-hint { color: var(--text-muted); font-size: 0.85em; font-weight: 400; }
+.mi-rule-formula { margin: 0; line-height: 1.6; }
+.mi-ess { width: 100%; border-collapse: collapse; font-size: 0.88em; }
+.mi-ess th, .mi-ess td { padding: 4px 6px 4px 0; text-align: left; }
+.mi-ess th { color: var(--text-muted); font-weight: 400; }
+.mi-ess input { width: 100%; }
+.mi-recon-lbl { color: var(--text-muted); }
+.mi-recon-why { color: var(--status-warning-fg); font-size: 0.88em; }
+.mi-fam-head { margin: 10px 0 4px; font-size: 0.8em; text-transform: uppercase;
+    letter-spacing: 0.04em; }
+.mi-fam-head:first-child { margin-top: 0; }
+.mi-preview { min-height: 1.2em; }
+
+/* ── Choix des essences et des canaux ── */
+.mi-ess-pick { border: 1px solid var(--border-soft); border-radius: var(--radius-small);
+    padding: 10px 12px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.mi-ess-pick legend { color: var(--text-muted); font-size: 0.85em; padding: 0 4px; }
+#mi-fam-ess { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.mi-ess-box { flex-direction: row !important; align-items: center; gap: 6px !important;
+    font-size: 0.9em !important; color: var(--text) !important; }
+.mi-chan { flex-direction: row !important; align-items: center; gap: 8px !important; }
+.mi-chan input { width: 80px; }
+/* L'aperçu est le dernier endroit où une erreur de numéro se voit encore : il énumère donc
+   les plages obtenues, pas seulement leur nombre. */
+.mi-prev-l { display: block; }
+.mi-prev-tot { display: block; margin-top: 4px; color: var(--text); font-weight: 600; }
