@@ -5,11 +5,136 @@
   "version": "0.6.0",
   "runtime": "inprocess",
   "description": "Registre du plan d'adressage multicast d'un fabric ST 2110 : plages (CIDR ou début-fin, essence video/audio-2110-30/anc-2110-40, réseau rouge/bleu, VLAN), attributions avec aide « prochaine adresse libre », recherche d'une adresse, jauge d'occupation, export JSON/CSV, et rapprochement avec les groupes réellement actifs vus par Monitoring 2110.",
-  "badge": { "label": "Plan", "class": "tool-mcastipam", "oklch": "0.74 0.14 340" },
-  "nav": { "section": "reseau", "label": "Réseau", "order": 28 },
+  "badge": {
+    "label": "Plan",
+    "class": "tool-mcastipam",
+    "oklch": "0.74 0.14 340"
+  },
+  "nav": {
+    "section": "reseau",
+    "label": "Réseau",
+    "order": 28
+  },
   "ui": {
     "page_html": "page.html",
     "page_js": "page.js",
     "page_css": "page.css"
+  },
+  "permissions": [
+    {
+      "id": "address.assign",
+      "label": "Attribuer des adresses multicast",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Créer, modifier ou retirer une attribution dans une plage."
+    },
+    {
+      "id": "range.manage",
+      "label": "Gérer les plages",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Créer, modifier, supprimer une plage (la suppression retire ses attributions)."
+    },
+    {
+      "id": "equipment.manage",
+      "label": "Gérer les équipements du plan",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Équipements (blocs 239.F.N.x) et noms de familles."
+    },
+    {
+      "id": "rule.manage",
+      "label": "Gérer les règles d'adressage",
+      "default_roles": [
+        "operator"
+      ]
+    }
+  ],
+  "acl": {
+    "resources": [
+      {
+        "key": "range",
+        "label": "Plages",
+        "choices": "ranges",
+        "choices_list": "ranges"
+      }
+    ],
+    "routes": [
+      {
+        "method": "POST",
+        "path": "reconcile",
+        "perm": null
+      },
+      {
+        "method": "POST",
+        "path": "reconcile-rule",
+        "perm": null
+      },
+      {
+        "method": "POST",
+        "path": "assigns",
+        "perm": "address.assign",
+        "resource": {
+          "range": "body.range_id"
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "assigns/{assign}",
+        "perm": "address.assign",
+        "resource": {
+          "range": "body.range_id"
+        }
+      },
+      {
+        "method": "DELETE",
+        "path": "assigns/{assign}",
+        "perm": "address.assign"
+      },
+      {
+        "method": "PUT",
+        "path": "ranges/{range}",
+        "perm": "range.manage",
+        "resource": {
+          "range": "{range}"
+        }
+      },
+      {
+        "method": "DELETE",
+        "path": "ranges/{range}",
+        "perm": "range.manage",
+        "resource": {
+          "range": "{range}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "ranges",
+        "perm": "range.manage"
+      },
+      {
+        "method": "*",
+        "path": "equipments/**",
+        "perm": "equipment.manage"
+      },
+      {
+        "method": "*",
+        "path": "family-labels/**",
+        "perm": "equipment.manage"
+      },
+      {
+        "method": "*",
+        "path": "rules/**",
+        "perm": "rule.manage"
+      },
+      {
+        "method": "*",
+        "path": "**",
+        "perm": "rule.manage"
+      }
+    ]
   }
 }
