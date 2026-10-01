@@ -51,6 +51,11 @@ RULE_SCOPE = "rule"
 # renumérote. La « famille » n'est pas une chose qu'on déclare : c'est un attribut de
 # l'équipement, et le regroupement s'en déduit à l'affichage.
 EQUIP_SCOPE = "equipment"
+# La famille n'est pas un objet qu'on crée — c'est un attribut de l'équipement. Mais elle
+# mérite un NOM : « 239.4.x » ne dit rien, « SNP régie » si. On stocke donc une simple
+# étiquette par numéro de famille, sans en faire une entité dont dépendraient les
+# équipements : supprimer l'étiquette ne doit rien casser, juste retirer le nom.
+FAMLABEL_SCOPE = "family_label"
 
 # Bloc multicast IPv4 : 224.0.0.0/4 (224.0.0.0 – 239.255.255.255).
 _MCAST_NET = ipaddress.ip_network("224.0.0.0/4")
@@ -173,6 +178,7 @@ def _range_out(row):
         "cidr": v.get("cidr"),
         "start": _dotted(lo) if lo is not None else v.get("start"),
         "end": _dotted(hi) if hi is not None else v.get("end"),
+        "pool": bool(v.get("pool")),
         "start_int": lo, "end_int": hi, "total": total,
         "essence": v.get("essence") or "autre",
         "network": v.get("network") or "les-deux",
@@ -492,6 +498,29 @@ def _equip_out(row):
             "notes": v.get("notes") or ""}
 
 
+def _famlabel_out(row):
+    v = row.get("value") or {}
+    return {"id": row.get("id"), "name": row.get("name"), "family": v.get("family"),
+            "notes": v.get("notes") or ""}
+
+
+def _list_famlabels(ctx):
+    return sorted((_famlabel_out(r) for r in ctx.store.list(FAMLABEL_SCOPE)),
+                  key=lambda f: f["family"] if isinstance(f["family"], int) else 0)
+
+
+def _famlabel_value(payload, base=None):
+    base = base or {}
+    fam = payload.get("family", base.get("family"))
+    try:
+        fam = int(fam)
+    except (TypeError, ValueError):
+        raise ValueError("numéro de famille non numérique")
+    if not (0 <= fam <= 255):
+        raise ValueError("famille hors 0–255")
+    return {"family": fam, "notes": (payload.get("notes", base.get("notes", "")) or "").strip()}
+
+
 def _list_equipments(ctx):
     return sorted((_equip_out(r) for r in ctx.store.list(EQUIP_SCOPE)),
                   key=lambda e: (e["family"] or 0, e["number"] or 0))
@@ -522,6 +551,33 @@ def _blocks(rule, equip):
                           "end": "239.%d.%d.%d" % (octet, equip["number"], fin),
                           "size": fin - ess["first"] + 1})
     return blocs
+
+
+def _blocs_calcules(ctx):
+    """Tous les blocs que la convention réserve, en entiers : [(lo, hi, libellé)].
+
+    Sert à prévenir un télescopage entre les deux mécanismes. Deux plans coexistent — la règle
+    et la saisie manuelle — et rien n'empêche d'attribuer à la main une adresse que la
+    convention a déjà donnée à un équipement. On AVERTIT sans bloquer, comme pour les
+    chevauchements de plages : c'est à l'exploitant de trancher, pas à l'outil."""
+    rules = {r["id"]: r for r in _list_rules(ctx)}
+    out = []
+    for e in _list_equipments(ctx):
+        r = rules.get(e["rule_id"])
+        if not r:
+            continue
+        for b in _blocks(r, e):
+            try:
+                out.append((_v4_int(b["start"]), _v4_int(b["end"]),
+                            "%s — %s (%s)" % (e["name"], b["essence_label"], b["network"])))
+            except ValueError:
+                continue
+    return out
+
+
+def _telescopage(ctx, lo, hi):
+    """Blocs de la convention qu'un intervalle [lo, hi] recouperait."""
+    return [lib for a, b, lib in _blocs_calcules(ctx) if lo <= b and a <= hi]
 
 
 def _plan_index(rules, equipments):
@@ -704,7 +760,7 @@ def _export_csv(ranges, assigns):
 
 # ─── Routage ──────────────────────────────────────────────────────────────────
 
-def _reconcile_regle(active, rules, equipments, failed=None):
+def _reconcile_regle(active, rules, equipments, ranges=None, assigns=None, failed=None):
     """Confronte les groupes ACTIFS à la règle, plutôt qu'à des plages énumérées.
 
     Le SENS est déterminant, et c'est pourquoi le front l'achemine jusqu'ici. Un flux que NOS
@@ -714,6 +770,21 @@ def _reconcile_regle(active, rules, equipments, failed=None):
 
     Cinq catégories, dont l'une dit explicitement ce qu'on n'a pas pu voir."""
     idx, familles = _plan_index(rules, equipments)
+    ranges, assigns = ranges or [], assigns or []
+
+    def a_la_main(n):
+        """Ce que le plan MANUEL dit d'une adresse : son attribution, sinon sa plage.
+
+        Une adresse peut être parfaitement documentée sans suivre la convention — un flux
+        tiers qu'on a choisi de consigner, un bloc hérité. La ranger « hors plan » pour cette
+        seule raison reviendrait à punir l'exploitant d'avoir pris la peine de l'écrire."""
+        for a in assigns:
+            if a.get("lo") is not None and a["lo"] <= n <= a["hi"]:
+                return a, next((r for r in ranges if r["id"] == a.get("range_id")), None)
+        for r in ranges:
+            if r.get("start_int") is not None and r["start_int"] <= n <= r["end_int"]:
+                return None, r
+        return None, None
     vus, act = set(), []
     for g in active or []:
         grp = (g.get("group") or "").strip()
@@ -727,7 +798,7 @@ def _reconcile_regle(active, rules, equipments, failed=None):
         act.append(g)
 
     conformes, a_corriger, exterieurs, hors_plan, inconnus = [], [], [], [], []
-    non_declares = []
+    non_declares, manuels = [], []
     for g in act:
         grp = (g.get("group") or "").strip()
         sens = (g.get("sens") or "").strip()
@@ -736,9 +807,31 @@ def _reconcile_regle(active, rules, equipments, failed=None):
         base = {"group": grp, "vlan": g.get("vlan"), "source": (g.get("source") or "").strip(),
                 "signal": g.get("signal") or "", "sens": sens, "kind": g.get("kind") or "",
                 "port": port}
+        # Une plage RÉSERVÉE prime sur la convention : c'est une décision humaine explicite,
+        # postérieure à la règle, et qui dit précisément « ici, je ne sais pas ce qui viendra ».
+        # La laisser derrière le verdict de la règle ferait ressortir chaque adresse du vivier
+        # comme un équipement non recensé — le contraire de ce que la réservation exprime.
+        vivier = next((r for r in ranges if r.get("pool") and r.get("start_int") is not None
+                       and r["start_int"] <= _v4_int(grp) <= r["end_int"]), None)
+        if vivier:
+            asg, _ = a_la_main(_v4_int(grp))
+            manuels.append({**base, "label": (asg or {}).get("label") or "",
+                            "device": (asg or {}).get("device") or "",
+                            "range": vivier.get("name") or "", "pool": True})
+            continue
         vu = _reconnaitre(grp, idx, familles)
         if not vu:
-            (exterieurs if sens == "recu" else hors_plan).append(base)
+            # La convention ne connaît pas cette adresse : le plan manuel, peut-être.
+            asg, rg = a_la_main(_v4_int(grp))
+            if asg:
+                manuels.append({**base, "label": asg.get("label") or "",
+                                "device": asg.get("device") or "",
+                                "range": (rg or {}).get("name") or ""})
+            elif rg:
+                non_declares.append({**base, "motif": "dans la plage « %s », sans attribution"
+                                                      % (rg.get("name") or "")})
+            else:
+                (exterieurs if sens == "recu" else hors_plan).append(base)
             continue
         info = {**base, "family": vu["family"], "equipment": vu["number"],
                 "network": vu["network"],
@@ -772,11 +865,12 @@ def _reconcile_regle(active, rules, equipments, failed=None):
 
     return {"conformes": conformes, "a_corriger": a_corriger, "exterieurs": exterieurs,
             "hors_plan": hors_plan, "equipements_inconnus": inconnus,
-            "non_declares": non_declares, "failed": list(failed or []),
+            "non_declares": non_declares, "manuels": manuels,
+            "failed": list(failed or []),
             "resume": {"actifs": len(act), "conformes": len(conformes),
                        "a_corriger": len(a_corriger), "exterieurs": len(exterieurs),
                        "hors_plan": len(hors_plan), "inconnus": len(inconnus),
-                       "non_declares": len(non_declares),
+                       "non_declares": len(non_declares), "manuels": len(manuels),
                        "switchs_non_lus": len(failed or [])}}
 
 
@@ -844,7 +938,10 @@ def api(path, method, payload, ctx):
                 r = par_id.get(e["rule_id"])
                 e["blocks"] = _blocks(r, e) if r else []
                 e["rule_name"] = r["name"] if r else ""
-            return {"equipments": eqs, "rules": rules}
+            # Les étiquettes voyagent avec les équipements : le volet les affiche ensemble,
+            # et un second aller-retour pour quelques noms serait du gaspillage.
+            return {"equipments": eqs, "rules": rules,
+                    "family_labels": _list_famlabels(ctx)}
         if method == "POST":
             name = (payload.get("name") or "").strip()
             if not name:
@@ -895,7 +992,54 @@ def api(path, method, payload, ctx):
     if parts == ["reconcile-rule"] and method == "POST":
         _ensure_default_rule(ctx)
         return _reconcile_regle(payload.get("active") or [], _list_rules(ctx),
-                                _list_equipments(ctx), payload.get("failed") or [])
+                                _list_equipments(ctx), _list_ranges(ctx), _list_assigns(ctx),
+                                payload.get("failed") or [])
+
+    # ── Étiquettes de famille ──
+    if parts == ["family-labels"]:
+        if method == "GET":
+            return {"family_labels": _list_famlabels(ctx)}
+        if method == "POST":
+            name = (payload.get("name") or "").strip()
+            if not name:
+                return 400, {"error": "nom de famille requis"}
+            try:
+                value = _famlabel_value(payload)
+            except ValueError as e:
+                return 400, {"error": str(e)}
+            for f in _list_famlabels(ctx):
+                if f["family"] == value["family"]:
+                    return 409, {"error": "la famille %d est déjà nommée « %s »"
+                                          % (value["family"], f["name"])}
+            fid = ctx.store.create(name, value, scope=FAMLABEL_SCOPE)
+            ctx.audit("family_label", "%d = %s" % (value["family"], name))
+            return {"id": fid}
+        return 405, {"error": "méthode non permise"}
+
+    if len(parts) == 2 and parts[0] == "family-labels":
+        try:
+            fid = int(parts[1])
+        except ValueError:
+            return 400, {"error": "identifiant invalide"}
+        row = ctx.store.get(fid)
+        if not row or row.get("scope") != FAMLABEL_SCOPE:
+            return 404, {"error": "étiquette introuvable"}
+        if method == "PUT":
+            name = (payload.get("name") or row.get("name") or "").strip()
+            if not name:
+                return 400, {"error": "nom de famille requis"}
+            try:
+                value = _famlabel_value(payload, base=row.get("value") or {})
+            except ValueError as e:
+                return 400, {"error": str(e)}
+            ctx.store.update(fid, name=name, value=value)
+            ctx.audit("family_label", "%d = %s" % (value["family"], name))
+            return {"ok": True}
+        if method == "DELETE":
+            ctx.store.delete(fid)
+            ctx.audit("family_label_delete", row.get("name") or str(fid))
+            return {"ok": True}
+        return 405, {"error": "méthode non permise"}
 
     # ── Plages ──
     if parts == ["ranges"]:
@@ -920,13 +1064,19 @@ def api(path, method, payload, ctx):
             vlan = int(vlan) if vlan not in (None, "", "null") else None
             value = {"mode": mode, "cidr": cidr, "start": _dotted(lo), "end": _dotted(hi),
                      "essence": essence, "network": network, "vlan": vlan,
+                     # Une plage RÉSERVÉE est un vivier : une machine y pioche ses adresses
+                     # sans qu'on sache lesquelles à l'avance. Elle est donc vide par
+                     # construction, et le rester n'est pas un oubli. Sans ce drapeau, l'outil
+                     # réclamait une attribution pour chaque adresse qui s'y allumait, et sa
+                     # jauge affichait 0 % à vie.
+                     "pool": bool(payload.get("pool")),
                      "notes": (payload.get("notes") or "").strip()}
             sid = ctx.store.create(name, value, scope=RANGE_SCOPE)
             ctx.audit("range_create", f"{name} {cidr or _dotted(lo) + '–' + _dotted(hi)}")
             # Chevauchements après ajout (avertissement renvoyé au front).
             ranges = _list_ranges(ctx)
             warn = [o for o in _overlaps(ranges) if sid in (o["a"], o["b"])]
-            return {"id": sid, "overlaps": warn}
+            return {"id": sid, "overlaps": warn, "convention": _telescopage(ctx, lo, hi)}
         return 405, {"error": "méthode non permise"}
 
     if len(parts) == 2 and parts[0] == "ranges":
@@ -953,6 +1103,12 @@ def api(path, method, payload, ctx):
             vlan = int(vlan) if vlan not in (None, "", "null") else None
             value = {"mode": mode, "cidr": cidr, "start": _dotted(lo), "end": _dotted(hi),
                      "essence": essence, "network": network, "vlan": vlan,
+                     # Une plage RÉSERVÉE est un vivier : une machine y pioche ses adresses
+                     # sans qu'on sache lesquelles à l'avance. Elle est donc vide par
+                     # construction, et le rester n'est pas un oubli. Sans ce drapeau, l'outil
+                     # réclamait une attribution pour chaque adresse qui s'y allumait, et sa
+                     # jauge affichait 0 % à vie.
+                     "pool": bool(payload.get("pool")),
                      "notes": (payload.get("notes") or "").strip()}
             ctx.store.update(sid, name=name, value=value)
             ctx.audit("range_update", name)
@@ -996,7 +1152,9 @@ def api(path, method, payload, ctx):
                         return 409, {"error": f"adresse déjà attribuée : {value['address']}"}
             sid = ctx.store.create(name, value, scope=ASSIGN_SCOPE)
             ctx.audit("assign_create", f"{name} {value['address']}")
-            return {"id": sid}
+            ligne = next((a for a in _list_assigns(ctx) if a["id"] == sid), None)
+            conv = _telescopage(ctx, ligne["lo"], ligne["hi"]) if ligne and ligne.get("lo") is not None else []
+            return {"id": sid, "convention": conv}
         return 405, {"error": "méthode non permise"}
 
     if len(parts) == 2 and parts[0] == "assigns":

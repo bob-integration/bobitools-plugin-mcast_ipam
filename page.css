@@ -179,3 +179,61 @@
    les plages obtenues, pas seulement leur nombre. */
 .mi-prev-l { display: block; }
 .mi-prev-tot { display: block; margin-top: 4px; color: var(--text); font-weight: 600; }
+
+/* Le socle pose déjà cette convention — « placeholders = exemples, jamais des valeurs
+   saisies » — mais son sélecteur vise `.form`, et ce plugin nomme son formulaire `.mi-form` :
+   la règle ne l'atteignait pas. Sans elle, un exemple comme « 4 » dans un champ en chasse
+   fixe est indiscernable d'une saisie, et le formulaire paraît pré-rempli. Mêmes valeurs que
+   le socle, plus le retour à la police de texte : la chasse fixe, elle aussi, fait valeur. */
+.mi-form input::placeholder,
+.mi-form textarea::placeholder,
+.mi-search input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.5;
+    font-style: italic;
+    font-family: var(--font-base);   /* jamais la chasse fixe : c'est du texte, pas une valeur */
+}
+
+/* Plage réservée : on remplace la jauge par une mention, plutôt que d'afficher 0 % à vie.
+   Un vivier vide n'est pas une plage inoccupée — c'est une plage qui fait son travail. */
+.mi-gauge-pool { background: transparent; border: 1px dashed var(--border); }
+.mi-gauge-pool .mi-gauge-txt { position: static; color: var(--text-muted); font-style: italic; }
+.mi-check { flex-direction: row !important; align-items: baseline; gap: 8px !important;
+    flex-wrap: wrap; color: var(--text) !important; }
+.mi-check .mi-hint { flex-basis: 100%; }
+
+/* Une case à cocher n'est pas un champ de saisie : la règle générique plus haut lui posait un
+   fond et une bordure, ce qui remplace le rendu natif par une boîte identique cochée ou non.
+   Les neutraliser une à une ne suffit pas — retirer la bordure fait disparaître la case tant
+   qu'elle est décochée. `all: revert` rend le contrôle entier au navigateur, qui sait le
+   dessiner dans ses deux états ; on ne rajoute ensuite que la taille et la couleur d'accent. */
+.mi-form input[type="checkbox"] {
+    all: revert;
+    width: 16px;
+    height: 16px;
+    flex: none;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.mi-check { cursor: pointer; }
+
+/* ── Volet des familles : tenir à l'échelle de dizaines d'équipements ── */
+/* L'intertitre devient une barre d'outils : pli, nom, compte, renommage. Il reste discret —
+   c'est un repère, pas un élément qu'on manipule à longueur de journée. */
+.mi-fam-head { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px;
+    font-size: 0.82em; text-transform: none; letter-spacing: 0; }
+.mi-fam-head:first-child { margin-top: 0; }
+.mi-fam-nom { font-weight: 600; color: var(--text); }
+.mi-fam-nom i { font-weight: 400; }
+.mi-fam-n { margin-left: auto; color: var(--text-muted); background: var(--bg-soft);
+    border-radius: 999px; padding: 0 7px; font-variant-numeric: tabular-nums; }
+.mi-fam-pli, .mi-fam-rename { background: none; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 0 2px; font-size: 1em; line-height: 1; }
+.mi-fam-pli:hover, .mi-fam-rename:hover { color: var(--text); }
+.mi-fam-rename { opacity: 0; }
+.mi-fam-head:hover .mi-fam-rename, .mi-fam-rename:focus { opacity: 1; }
+.mi-fam-search { margin-bottom: 6px; }
+.mi-fam-tools { display: flex; gap: 10px; margin-bottom: 8px; }
+.mi-lnk { background: none; border: none; padding: 0; color: var(--text-muted);
+    font-size: 0.8em; cursor: pointer; text-decoration: underline; }
+.mi-lnk:hover { color: var(--text); }

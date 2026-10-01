@@ -15,6 +15,9 @@ window.BTTools.mcast_ipam = (function () {
     // Le plan repose d'abord sur une CONVENTION : on stocke la règle et les familles, et les
     // adresses se calculent. Les plages manuelles ne servent plus qu'à ce qui y échappe.
     let rules = [], equipments = [], selEquip = null;
+    let famLabels = [];                 // {family, name} — l'étiquette, pas une entité
+    let famFermees = new Set();         // familles repliées, pour tenir à l'échelle
+    let filtre = "";
 
     const esc = (window.BT && BT.esc) || ((s) => String(s == null ? "" : s)
         .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
@@ -32,28 +35,57 @@ window.BTTools.mcast_ipam = (function () {
         const r = await CTX.api("equipments");
         equipments = r.equipments || [];
         rules = r.rules || [];
+        famLabels = r.family_labels || [];
+    }
+
+    const nomFamille = (n) => (famLabels.find((f) => f.family === n) || {}).name || "";
+    const idFamille = (n) => (famLabels.find((f) => f.family === n) || {}).id || null;
+
+    // Un filtre doit chercher là où l'œil cherche : le nom, le numéro, l'adresse produite et
+    // l'unicast documenté. Chercher « 12 » doit trouver l'équipement 12 comme 239.4.12.x.
+    function correspond(e) {
+        if (!filtre) return true;
+        const q = filtre.toLowerCase();
+        return [e.name, String(e.number), String(e.family), e.unicast || "",
+                "239." + e.family + "." + e.number, nomFamille(e.family)]
+            .some((v) => String(v).toLowerCase().includes(q));
     }
 
     function renderFamilies() {
-        $("#mi-fam-count").textContent = equipments.length ? "(" + equipments.length + ")" : "";
         const ul = $("#mi-families");
+        const vus = equipments.filter(correspond);
+        $("#mi-fam-count").textContent = equipments.length
+            ? "(" + (filtre ? vus.length + "/" + equipments.length : equipments.length) + ")" : "";
         if (!equipments.length) {
             ul.innerHTML = '<li class="meta">Aucun équipement. Déclarez-en un : ses adresses s\'en déduiront.</li>';
             return;
         }
-        // La famille n'est pas un objet qu'on crée, c'est un attribut : elle sert ici de
-        // simple intertitre, reconstruit à chaque rendu depuis les équipements eux-mêmes.
+        if (!vus.length) {
+            ul.innerHTML = '<li class="meta">Aucun équipement ne correspond à « ' + esc(filtre) + ' ».</li>';
+            return;
+        }
         const parFamille = new Map();
-        equipments.forEach((e) => {
+        vus.forEach((e) => {
             if (!parFamille.has(e.family)) parFamille.set(e.family, []);
             parFamille.get(e.family).push(e);
         });
         const familles = Array.from(parFamille.keys()).sort((a, b) => a - b);
         ul.innerHTML = familles.map((fam) => {
-            const liste = parFamille.get(fam);
-            return '<li class="mi-fam-head meta">Famille ' + fam +
-                ' <span class="mono">239.' + fam + '.x</span></li>' +
-                liste.map((e) => {
+            const liste = parFamille.get(fam).slice().sort((a, b) => a.number - b.number);
+            // Un filtre actif OUVRE d'office les familles qui répondent : cacher un résultat
+            // derrière un pli fermé reviendrait à ne pas l'avoir trouvé.
+            const fermee = !filtre && famFermees.has(fam);
+            const nom = nomFamille(fam);
+            return '<li class="mi-fam-head' + (fermee ? " mi-fam-fermee" : "") + '" data-fam="' + fam + '">' +
+                '<button type="button" class="mi-fam-pli" data-fam="' + fam + '" ' +
+                'aria-expanded="' + (fermee ? "false" : "true") + '" ' +
+                'title="' + (fermee ? "Déplier" : "Replier") + '">' + (fermee ? "▸" : "▾") + "</button>" +
+                '<span class="mi-fam-nom">' + (nom ? esc(nom) : '<i class="meta">Famille ' + fam + "</i>") + "</span>" +
+                '<span class="mono meta">239.' + fam + ".x</span>" +
+                '<span class="mi-fam-n">' + liste.length + "</span>" +
+                '<button type="button" class="mi-fam-rename" data-fam="' + fam + '" ' +
+                'title="Nommer cette famille">✎</button></li>' +
+                (fermee ? "" : liste.map((e) => {
                     const r = ruleOf(e);
                     const bleu = (e.network === "les-deux" || e.network === "bleu");
                     const sec = bleu ? " + 239." + (e.family + (r.offset || 0)) + "." + e.number + ".x" : "";
@@ -63,9 +95,38 @@ window.BTTools.mcast_ipam = (function () {
                         '<div class="mi-range-cidr mono">239.' + e.family + "." + e.number + ".x" + esc(sec) + '</div>' +
                         (e.unicast ? '<div class="mi-fam-sub meta mono">' + esc(e.unicast) + "</div>" : "") +
                         '</li>';
-                }).join("");
+                }).join(""));
         }).join("");
         ul.querySelectorAll(".mi-range").forEach((li) => li.onclick = () => selectFamily(Number(li.dataset.id)));
+        ul.querySelectorAll(".mi-fam-pli").forEach((b) => b.onclick = (ev) => {
+            ev.stopPropagation();
+            const f = Number(b.dataset.fam);
+            if (famFermees.has(f)) famFermees.delete(f); else famFermees.add(f);
+            renderFamilies();
+        });
+        ul.querySelectorAll(".mi-fam-rename").forEach((b) => b.onclick = (ev) => {
+            ev.stopPropagation();
+            renommerFamille(Number(b.dataset.fam));
+        });
+    }
+
+    async function renommerFamille(fam) {
+        const actuel = nomFamille(fam);
+        const nom = prompt("Nom de la famille " + fam + " (239." + fam + ".x) :", actuel);
+        if (nom === null) return;
+        const id = idFamille(fam);
+        try {
+            if (!nom.trim()) {
+                if (!id) return;
+                await CTX.api("family-labels/" + id, { method: "DELETE" });
+            } else if (id) {
+                await CTX.api("family-labels/" + id, { method: "PUT", body: { name: nom.trim(), family: fam } });
+            } else {
+                await CTX.api("family-labels", { method: "POST", body: { name: nom.trim(), family: fam } });
+            }
+            await loadPlan();
+            renderFamilies(); renderMain();
+        } catch (e) { CTX.toast(e.message, "error"); }
     }
 
     function ruleOf(e) { return rules.find((r) => r.id === e.rule_id) || { essences: [], offset: 0 }; }
@@ -99,7 +160,13 @@ window.BTTools.mcast_ipam = (function () {
         });
         return peers;
     }
-    function gaugeHTML(used, total) {
+    function gaugeHTML(used, total, pool) {
+        // Une plage réservée est vide par construction : une jauge à 0 % y suggérerait un
+        // oubli, alors qu'elle dit exactement ce qu'on a voulu.
+        if (pool) {
+            return '<div class="mi-gauge mi-gauge-pool" title="Réservée — attribution libre, ' +
+                total + ' adresses"><span class="mi-gauge-txt">réservée · ' + total + '</span></div>';
+        }
         const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
         const cls = pct >= 90 ? "hot" : pct >= 70 ? "warm" : "";
         return '<div class="mi-gauge" title="' + used + ' / ' + total + ' adresses">' +
@@ -118,7 +185,7 @@ window.BTTools.mcast_ipam = (function () {
                 '<div class="mi-range-top"><span class="mi-range-name">' + esc(r.name) + '</span>' +
                 '<span class="mi-chip e-' + esc(r.essence) + '">' + esc(ESSENCE_LABEL[r.essence] || r.essence) + '</span></div>' +
                 '<div class="mi-range-cidr mono">' + esc(bounds) + '</div>' +
-                gaugeHTML(used, r.total) +
+                gaugeHTML(used, r.total, r.pool) +
                 (peers.length ? '<div class="mi-warn" title="Chevauchement">⚠ chevauche : ' + esc(peers.join(", ")) + '</div>' : "") +
                 '</li>';
         }).join("");
@@ -126,8 +193,12 @@ window.BTTools.mcast_ipam = (function () {
     }
 
     async function selectRange(id) {
-        selected = id;
+        // Les deux volets partagent le panneau de droite : sans cette remise à zéro, cliquer
+        // une plage manuelle pendant qu'un équipement est sélectionné ne changeait rien à
+        // l'écran — `renderMain` sert l'équipement en premier.
+        selected = id; selEquip = null;
         try { await loadAssigns(id); } catch (e) { CTX.toast(e.message, "error"); }
+        renderFamilies();
         renderRanges();
         renderMain();
     }
@@ -169,7 +240,7 @@ window.BTTools.mcast_ipam = (function () {
             (r.vlan != null ? '<span class="mi-chip">VLAN ' + esc(r.vlan) + '</span>' : "") +
             '</div>' +
             (r.notes ? '<div class="mi-notes">' + esc(r.notes) + '</div>' : "") +
-            '<div class="mi-occ">' + gaugeHTML(used, r.total) + '</div>' +
+            '<div class="mi-occ">' + gaugeHTML(used, r.total, r.pool) + '</div>' +
             '<div class="mi-assign-head"><strong>Attributions</strong>' +
             '<button class="btn btn-green mi-a-new" type="button">+ Attribution</button></div>' +
             '<table class="mi-table"><thead><tr><th>Adresse</th><th>Équipement</th><th>Libellé</th>' +
@@ -368,6 +439,7 @@ window.BTTools.mcast_ipam = (function () {
             f.essence.value = r.essence || "video";
             f.network.value = r.network || "les-deux";
             if (r.vlan != null) f.vlan.value = r.vlan;
+            if (f.pool) f.pool.checked = !!r.pool;
             f.notes.value = r.notes || "";
         }
         syncRangeMode();
@@ -388,6 +460,7 @@ window.BTTools.mcast_ipam = (function () {
             name: f.name.value.trim(),
             essence: f.essence.value, network: f.network.value,
             vlan: f.vlan.value.trim() || null,
+            pool: !!(f.pool && f.pool.checked),
             notes: f.notes.value.trim(),
         };
         if (mode === "cidr") body.cidr = f.cidr.value.trim();
@@ -402,6 +475,12 @@ window.BTTools.mcast_ipam = (function () {
             if (res && res.overlaps && res.overlaps.length) {
                 const names = res.overlaps.map((o) => o.a_name + " ↔ " + o.b_name).join(", ");
                 CTX.toast("⚠ Chevauchement : " + names, "warning");
+            }
+            // Les deux plans coexistent : la règle ne sait pas qu'on a saisi ici, et la
+            // saisie ne voit pas ce que la règle réserve. On avertit sans bloquer — c'est
+            // parfois délibéré de documenter à la main une adresse que la convention couvre.
+            if (res && res.convention && res.convention.length) {
+                CTX.toast("⚠ Recoupe la convention : " + res.convention.join(", "), "warning");
             }
             const newId = id ? Number(id) : (res && res.id);
             await loadRanges();
@@ -616,7 +695,8 @@ window.BTTools.mcast_ipam = (function () {
 
         $("#mi-recon-body").innerHTML =
             '<div class="mi-recon-sum">' + (s.actifs || 0) + " groupes actifs · " +
-            (s.conformes || 0) + " conformes à la convention</div>" +
+            (s.conformes || 0) + " par la convention" +
+            (s.manuels ? " · " + s.manuels + " déclarés à la main" : "") + "</div>" +
             (r.failed && r.failed.length
                 ? '<div class="mi-recon-fail">⚠ ' + r.failed.length +
                   " switch(s) non lus : la liste est incomplète.<br><span class=\"meta\">" +
@@ -630,7 +710,15 @@ window.BTTools.mcast_ipam = (function () {
                     (x.signal ? ' <span class="mi-recon-lbl">' + esc(x.signal) + "</span>" : "") +
                     ' <span class="mi-recon-why">' + esc(x.motif || "") + "</span></li>") +
             reconSection("○ Sources extérieures", "sec-inactive", r.exterieurs || [], ligneExt) +
-            reconSection("✓ Conformes", "sec-ok", r.conformes || [], ligne);
+            reconSection("✓ Conformes à la convention", "sec-ok", r.conformes || [], ligne) +
+            // Déclaré à la main, donc parfaitement documenté — simplement pas par la règle.
+            // Une section distincte plutôt qu'un mélange : on voit d'un coup d'œil ce qui
+            // relève de la convention et ce qui a demandé une décision humaine.
+            reconSection("✎ Déclarés à la main", "sec-ok", r.manuels || [],
+                (x) => '<li><span class="mono">' + esc(x.group) + "</span>" +
+                    (x.label ? ' <span class="mi-recon-lbl">' + esc(x.label) + "</span>" : "") +
+                    (x.device ? ' <span class="meta">' + esc(x.device) + "</span>" : "") +
+                    (x.range ? ' <span class="meta">— ' + esc(x.range) + "</span>" : "") + "</li>");
     }
 
     function renderRecon(r) {
@@ -707,6 +795,12 @@ window.BTTools.mcast_ipam = (function () {
         $("#mi-rule-edit").onclick = openRuleModal;
         $("#mi-rule-cancel").onclick = () => m_hide("#mi-rule-modal");
         $("#mi-rule-form").onsubmit = submitRule;
+        $("#mi-fam-filter").oninput = (e) => { filtre = e.target.value.trim(); renderFamilies(); };
+        $("#mi-fam-collapse").onclick = () => {
+            equipments.forEach((e) => famFermees.add(e.family));
+            renderFamilies();
+        };
+        $("#mi-fam-expand").onclick = () => { famFermees.clear(); renderFamilies(); };
         // Fermeture des modales par clic sur le fond.
         $$(".mi-modal").forEach((m) => m.onclick = (e) => { if (e.target === m) m.hidden = true; });
         // La règle et les familles portent le plan : elles se chargent d'abord. Un échec sur
@@ -718,6 +812,7 @@ window.BTTools.mcast_ipam = (function () {
     function unmount() {
         EL = null; CTX = null; ranges = []; assignsByRange = {}; selected = null;
         rules = []; equipments = []; selEquip = null;
+        famLabels = []; famFermees = new Set(); filtre = "";
     }
 
     return { mount, unmount };

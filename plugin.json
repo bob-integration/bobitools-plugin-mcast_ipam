@@ -2,7 +2,7 @@
   "license": "GPL-3.0-or-later",
   "type": "mcast_ipam",
   "label": "Plan multicast",
-  "version": "0.3.0",
+  "version": "0.6.0",
   "runtime": "inprocess",
   "description": "Registre du plan d'adressage multicast d'un fabric ST 2110 : plages (CIDR ou début-fin, essence video/audio-2110-30/anc-2110-40, réseau rouge/bleu, VLAN), attributions avec aide « prochaine adresse libre », recherche d'une adresse, jauge d'occupation, export JSON/CSV, et rapprochement avec les groupes réellement actifs vus par Monitoring 2110.",
   "badge": { "label": "Plan", "class": "tool-mcastipam", "oklch": "0.74 0.14 340" },
