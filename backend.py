@@ -640,6 +640,54 @@ def _reconnaitre(group, idx, familles):
             "number": equip["number"], "essence": None, "port": None, "known": True}
 
 
+def _nommer(groupes, ctx):
+    """Le nom que le plan donne à chaque adresse, pour les AUTRES outils (NAT multicast…).
+
+    Ordre de confiance : une attribution saisie à la main (quelqu'un a écrit ce nom pour
+    CETTE adresse), puis l'équipement que la convention reconnaît, puis la plage, enfin la
+    seule famille. Une adresse que le plan ignore est simplement absente de la réponse :
+    mieux vaut pas de nom qu'un nom deviné."""
+    ranges, assigns = _list_ranges(ctx), _list_assigns(ctx)
+    rules = _list_rules(ctx)
+    idx, familles = _plan_index(rules, _list_equipments(ctx))
+    etiquettes = {f["family"]: f["name"] for f in _list_famlabels(ctx)}
+    out = {}
+    for g in groupes:
+        try:
+            n = _v4_int(g)
+        except ValueError:
+            continue
+        a = next((x for x in assigns if x["lo"] is not None and x["lo"] <= n <= x["hi"]), None)
+        if a:
+            nom = a["label"] or a["device"] or a["name"] or ""
+            detail = " · ".join(x for x in (a["device"] if a["label"] else "",
+                                            "UDP %s" % a["udp_port"] if a["udp_port"] else "") if x)
+            if nom:
+                out[g] = {"name": nom, "detail": detail, "source": "attribution"}
+                continue
+        r = _reconnaitre(g, idx, familles)
+        if r and r.get("equip"):
+            morceaux = []
+            if r.get("essence"):
+                morceaux.append(r["essence"].get("label") or r["essence"].get("key"))
+                if r.get("canal") and r["canal"] > 1:
+                    morceaux.append("canal %d" % r["canal"])
+            morceaux.append(r["network"])
+            out[g] = {"name": r["equip"]["name"], "detail": " · ".join(m for m in morceaux if m),
+                      "source": "convention"}
+            continue
+        rg = next((x for x in ranges if x["start_int"] is not None
+                   and x["start_int"] <= n <= x["end_int"]), None)
+        if rg and rg.get("name"):
+            out[g] = {"name": rg["name"], "detail": rg["essence"], "source": "plage"}
+            continue
+        if r:
+            nom = etiquettes.get(r["family"])
+            if nom:
+                out[g] = {"name": nom, "detail": "équipement %s non recensé" % r["number"],
+                          "source": "famille"}
+    return out
+
 # ─── Rapprochement avec le réel ───────────────────────────────────────────────
 
 def _reconcile(active, ranges, assigns, failed=None):
@@ -1184,6 +1232,15 @@ def api(path, method, payload, ctx):
             ctx.audit("assign_delete", row.get("name") or str(sid))
             return {"ok": True}
         return 405, {"error": "méthode non permise"}
+
+    # ── Noms des adresses, pour les autres outils (lecture seule) ──
+    # GET, pour ne pas passer par l'audit des écritures : un écran qui se rafraîchit toutes
+    # les 20 s n'a rien à faire dans le journal.
+    if parts == ["names"] and method == "GET":
+        brut = payload.get("groups") or ""
+        groupes = [g.strip() for g in (brut if isinstance(brut, list) else str(brut).split(","))
+                   if g and g.strip()][:2000]
+        return {"names": _nommer(groupes, ctx)}
 
     # ── Prochaine adresse libre dans une plage ──
     if parts == ["next-free"] and method == "GET":
