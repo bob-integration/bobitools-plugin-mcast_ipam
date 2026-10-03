@@ -61,3 +61,15 @@ modifiable**.
 
 Bouton **Exporter** → **JSON** (plan complet, ré-importable à la main) ou **CSV** (une ligne
 par attribution, tableur). Le téléchargement se fait dans le navigateur.
+
+## Nommer les flux des autres outils
+
+Le plan sert aussi de **dictionnaire** : `GET /api/tools/mcast_ipam/names?groups=a,b,…` rend,
+pour chaque adresse, le nom que le plan lui donne — dans cet ordre : une **attribution**
+saisie à la main, puis l'**équipement** que reconnaît la convention (avec essence, canal et
+réseau), puis la **plage**, enfin le **nom de famille**. Une adresse que le plan ignore est
+absente de la réponse : pas de nom deviné. Lecture seule, hors journal d'audit.
+
+Premier utilisateur : **NAT multicast**, qui affiche ces noms dans ses traductions, sa vue
+2022-7 et sa recherche. Plus le plan est tenu, plus les autres outils parlent en noms plutôt
+qu'en adresses.
